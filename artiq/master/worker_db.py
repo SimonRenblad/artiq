@@ -137,10 +137,10 @@ class DatasetManager:
         if key in self._broadcaster.raw_view:
             if target is not None:
                 assert target is self._broadcaster.raw_view[key][1]
-            return self._broadcaster[key][1]
+            return self._broadcaster[key][1]["value"]
         if target is None:
             raise KeyError("Cannot mutate nonexistent dataset '{}'".format(key))
-        return target
+        return target["value"]
 
     def mutate(self, key, index, value):
         target = self._get_mutation_target(key)
