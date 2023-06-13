@@ -338,6 +338,7 @@ class HasEnvironment:
 
     @rpc(flags={"async"})
     def set_dataset(self, key, value,
+                    unit="", scale=None, ndecimals=2,
                     broadcast=False, persist=False, archive=True):
         """Sets the contents and handling modes of a dataset.
 
@@ -351,7 +352,18 @@ class HasEnvironment:
         :param archive: the data is saved into the local storage of the current
             run (archived as a HDF5 file).
         """
-        self.__dataset_mgr.set(key, value, broadcast, persist, archive)
+        if scale is None:
+            if unit == "":
+                scale = 1.0
+            else:
+                try:
+                    scale = getattr(units, unit)
+                except AttributeError:
+                    raise KeyError("Unit {} is unknown, you must specify "
+                                   "the scale manually".format(unit))
+        data = {"value": value, "unit": unit,
+                "scale": scale, "ndecimals": ndecimals}
+        self.__dataset_mgr.set(key, data, broadcast, persist, archive)
 
     @rpc(flags={"async"})
     def mutate_dataset(self, key, index, value):
