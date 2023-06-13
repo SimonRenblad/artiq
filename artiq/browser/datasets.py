@@ -5,7 +5,7 @@ from PyQt5 import QtCore, QtWidgets
 
 from sipyco.pc_rpc import AsyncioClient as RPCClient
 
-from artiq.tools import short_format
+from artiq.tools import dataset_to_string
 from artiq.gui.tools import LayoutWidget, QRecursiveFilterProxyModel
 from artiq.gui.models import DictSyncTreeSepModel
 
@@ -20,7 +20,7 @@ class Model(DictSyncTreeSepModel):
         DictSyncTreeSepModel.__init__(self, ".", ["Dataset", "Value"], init)
 
     def convert(self, k, v, column):
-        return short_format(v[1])
+        return dataset_to_string(v[1])
 
 
 class DatasetCtl:
