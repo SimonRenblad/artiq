@@ -229,7 +229,10 @@ class SimpleApplet:
             self.main_widget.show()
 
     def sub_init(self, data):
-        self.data = data
+        self.data = {key: d[1]["value"] for key, d in data.items()}
+        self.unit = {key: d[1]["unit"] for key, d in data.items()}
+        self.scale = {key: d[1]["scale"] for key, d in data.items()}
+        self.ndecimals = {key: d[1]["ndecimals"] for key, d in data.items()}
         return data
 
     def is_dataset_subscribed(self, key):
@@ -254,11 +257,12 @@ class SimpleApplet:
         else:
             return False
 
-    def emit_data_changed(self, data, mod_buffer):
-        self.main_widget.data_changed(data, mod_buffer)
+    def emit_data_changed(self, data, unit, scale, ndecimals, mod_buffer):
+        self.main_widget.data_changed(data, unit, scale, ndecimals, mod_buffer)
 
     def flush_mod_buffer(self):
-        self.emit_data_changed(self.data, self.mod_buffer)
+        self.emit_data_changed(self.data, self.unit, self.scale,
+                               self.ndecimals, self.mod_buffer)
         del self.mod_buffer
 
     def sub_mod(self, mod):
@@ -273,7 +277,8 @@ class SimpleApplet:
                 self.loop.call_later(self.args.update_delay,
                                      self.flush_mod_buffer)
         else:
-            self.emit_data_changed(self.data, [mod])
+            self.emit_data_changed(self.data, self.unit, self.scale,
+                                   self.ndecimals, [mod])
 
     def subscribe(self):
         if self.embed is None:
