@@ -23,6 +23,7 @@ from sipyco.broadcast import Receiver
 from sipyco import common_args, pyon
 
 from artiq.tools import short_format, parse_arguments
+from artiq.language import units
 from artiq import __version__ as artiq_version
 
 
@@ -91,6 +92,12 @@ def get_argparser():
                                     help="name of the dataset")
     parser_set_dataset.add_argument("value", metavar="VALUE",
                                     help="value in PYON format")
+
+    parser_set_dataset.add_argument("-u", "--unit", default="", type=str)
+
+    parser_set_dataset.add_argument("-s", "--scale", default="", type=str)
+
+    parser_set_dataset.add_argument("-d", "--ndecimals", default=2, type=int)
 
     persist_group = parser_set_dataset.add_mutually_exclusive_group()
     persist_group.add_argument("-p", "--persist", action="store_true",
@@ -174,7 +181,20 @@ def _action_set_dataset(remote, args):
         persist = True
     if args.no_persist:
         persist = False
-    remote.set(args.name, pyon.decode(args.value), persist)
+    data = dict()
+    data["value"] = pyon.decode(args.value)
+    data["unit"] = args.unit
+    if args.scale is None:
+        if args.unit == "":
+            data["scale"] = 1.0
+        else:
+            try:
+                data["scale"] = getattr(units, args.unit)
+            except AttributeError:
+                raise KeyError("Unit {} is unknown, you must specify "
+                               "the scale manually".format(args.unit))
+    data["ndecimals"] = args.ndecimals
+    remote.set(args.name, data, persist)
 
 
 def _action_del_dataset(remote, args):
