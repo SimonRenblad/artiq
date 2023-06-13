@@ -194,7 +194,11 @@ class FilesDock(QtWidgets.QDockWidget):
             if "archive" in f:
                 def visitor(k, v):
                     if isinstance(v, h5py.Dataset):
-                        rd[k] = (True, v[()])
+                        d = {"value": v[()]}
+                        d["unit"] = v.attrs["unit"] if "unit" in v.attrs.keys() else ""
+                        d["scale"] = v.attrs["scale"] if "scale" in v.attrs.keys() else 1
+                        d["ndecimals"] = v.attrs["ndecimals"] if "ndecimals" in v.attrs.keys() else 2
+                        rd[k] = (True, d)
 
                 f["archive"].visititems(visitor)
 
@@ -204,7 +208,11 @@ class FilesDock(QtWidgets.QDockWidget):
                         if k in rd:
                             logger.warning("dataset '%s' is both in archive "
                                            "and outputs", k)
-                        rd[k] = (True, v[()])
+                        d = {"value": v[()]}
+                        d["unit"] = v.attrs["unit"] if "unit" in v.attrs.keys() else ""
+                        d["scale"] = v.attrs["scale"] if "scale" in v.attrs.keys() else 1
+                        d["ndecimals"] = v.attrs["ndecimals"] if "ndecimals" in v.attrs.keys() else 2
+                        rd[k] = (True, d)
 
                 f["datasets"].visititems(visitor)
 
