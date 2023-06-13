@@ -55,7 +55,7 @@ class ExperimentDatasetCase(unittest.TestCase):
 
         for i in range(2):    
             self.exp.set(KEY, i)
-            self.assertEqual(self.exp.get(KEY), i)
+            self.assertEqual(self.exp.get(KEY)['value'], i)
             with self.assertRaises(KeyError):
                 self.dataset_db.get(KEY)
 
@@ -64,34 +64,34 @@ class ExperimentDatasetCase(unittest.TestCase):
             self.exp.get(KEY)
 
         self.exp.set(KEY, 0, broadcast=True)
-        self.assertEqual(self.exp.get(KEY), 0)
-        self.assertEqual(self.dataset_db.get(KEY), 0)
+        self.assertEqual(self.exp.get(KEY)['value'], 0)
+        self.assertEqual(self.dataset_db.get(KEY)['value'], 0)
 
         self.exp.set(KEY, 1, broadcast=False)
-        self.assertEqual(self.exp.get(KEY), 1)
+        self.assertEqual(self.exp.get(KEY)['value'], 1)
         with self.assertRaises(KeyError):
             self.dataset_db.get(KEY)
 
     def test_append_local(self):
         self.exp.set(KEY, [])
         self.exp.append(KEY, 0)
-        self.assertEqual(self.exp.get(KEY), [0])
+        self.assertEqual(self.exp.get(KEY)['value'], [0])
         self.exp.append(KEY, 1)
-        self.assertEqual(self.exp.get(KEY), [0, 1])
+        self.assertEqual(self.exp.get(KEY)['value'], [0, 1])
 
     def test_append_broadcast(self):
         self.exp.set(KEY, [], broadcast=True)
         self.exp.append(KEY, 0)
-        self.assertEqual(self.dataset_db.data[KEY][1], [0])
+        self.assertEqual(self.dataset_db.data[KEY][1]['value'], [0])
         self.exp.append(KEY, 1)
-        self.assertEqual(self.dataset_db.data[KEY][1], [0, 1])
+        self.assertEqual(self.dataset_db.data[KEY][1]['value'], [0, 1])
 
     def test_append_array(self):
         for broadcast in (True, False):
             self.exp.set(KEY, [], broadcast=broadcast)
             self.exp.append(KEY, [])
             self.exp.append(KEY, [])
-            self.assertEqual(self.exp.get(KEY), [[], []])
+            self.assertEqual(self.exp.get(KEY)['value'], [[], []])
 
     def test_append_scalar_fails(self):
         for broadcast in (True, False):
@@ -103,3 +103,15 @@ class ExperimentDatasetCase(unittest.TestCase):
         with self.assertRaises(KeyError):
             self.exp.append(KEY, 0)
 
+    def test_set_dataset_units(self):
+        self.exp.set(KEY, 1, unit='km', scale=1000.0, ndecimals=1)
+        self.assertEqual(self.exp.get(KEY), {'value': 1, 'unit': 'km', 'scale': 1000.0, 'ndecimals': 1})
+
+    def test_set_dataset_defaults(self):
+        self.exp.set(KEY, 1, unit='kV')
+        self.assertEqual(self.exp.get(KEY), {'value': 1, 'unit': 'kV', 'scale': 1000.0, 'ndecimals': 2})
+
+    def test_set_dataset_unit_broadcast(self):
+        self.exp.set(KEY, 1, unit='kV', broadcast=True)
+        self.assertEqual(self.exp.get(KEY)['unit'], 'kV')
+        self.assertEqual(self.dataset_db.get(KEY)['unit'], 'kV')
