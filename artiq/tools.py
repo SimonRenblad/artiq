@@ -20,7 +20,8 @@ from artiq.language.environment import is_public_experiment
 __all__ = ["parse_arguments", "elide", "short_format", "file_import",
            "get_experiment",
            "exc_to_warning", "asyncio_wait_or_cancel",
-           "get_windows_drives", "get_user_config_dir"]
+           "get_windows_drives", "get_user_config_dir",
+           "dataset_to_string", "array_to_string", "dataset_to_edit_string"]
 
 
 logger = logging.getLogger(__name__)
@@ -147,3 +148,37 @@ def get_user_config_dir():
     dir = user_config_dir("artiq", "m-labs", major)
     os.makedirs(dir, exist_ok=True)
     return dir
+
+
+def dataset_to_string(data, with_unit=True):
+    if isinstance(data["value"], bool):
+        return str(data["value"])
+    unit = data["unit"] if with_unit else ""
+    if type(data["value"]) is np.ndarray:
+        return array_to_string(data)
+    if data["ndecimals"] == 0:
+        return f"{int(data['value'])} {unit}".rstrip()
+    elif data["ndecimals"]:
+        return f"{data['value']:.{data['ndecimals']}f} {unit}".rstrip()
+    else:
+        return f"{data['value']} {unit}".rstrip()
+
+
+def array_to_string(data, with_unit=True):
+    unit = data["unit"] if with_unit else ""
+    s = " " + unit
+    s = s.rstrip()
+    return np.array2string(data["value"],
+                           max_line_width=1000,
+                           precision=data["ndecimals"],
+                           suppress_small=True,
+                           separator=', ',
+                           threshold=10,
+                           edgeitems=2,
+                           floatmode='fixed') + s
+
+
+def dataset_to_edit_string(data):
+    if not isinstance(data["value"], np.ndarray):
+        return dataset_to_string(data, with_unit=False)
+    return str(data["value"].tolist())
