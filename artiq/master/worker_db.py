@@ -180,7 +180,14 @@ def _write(group, k, v):
     # Add context to exception message when the user writes a dataset that is
     # not representable in HDF5.
     try:
-        group[k] = v
+        if isinstance(v, dict):
+            group[k] = v["value"]
+            group[k].attrs["unit"] = v["unit"]
+            group[k].attrs["scale"] = v["scale"]
+            if v["ndecimals"]:
+                group[k].attrs["ndecimals"] = v["ndecimals"]
+        else:
+            group[k] = v
     except TypeError as e:
         raise TypeError("Error writing dataset '{}' of type '{}': {}".format(
             k, type(v), e))
