@@ -33,21 +33,43 @@ class CreateEditDialog(QtWidgets.QDialog):
         grid.setColumnMinimumWidth(2, 60)
         self.setLayout(grid)
 
+        self.validFields = [False, True, True]
+
         grid.addWidget(QtWidgets.QLabel("Name:"), 0, 0)
         self.name_widget = QtWidgets.QLineEdit()
         grid.addWidget(self.name_widget, 0, 1)
 
         grid.addWidget(QtWidgets.QLabel("Value:"), 1, 0)
-        self.value_widget = QtWidgets.QLineEdit()
+        self.value_widget = QtWidgets.QTextEdit()
         self.value_widget.setPlaceholderText('PYON (Python)')
         grid.addWidget(self.value_widget, 1, 1)
         self.data_type = QtWidgets.QLabel("data type")
         grid.addWidget(self.data_type, 1, 2)
         self.value_widget.textChanged.connect(self.dtype)
 
-        grid.addWidget(QtWidgets.QLabel("Persist:"), 2, 0)
+        grid.addWidget(QtWidgets.QLabel("Unit:"), 2, 0)
+        self.unit_widget = QtWidgets.QLineEdit()
+        grid.addWidget(self.unit_widget, 2, 1)
+
+        grid.addWidget(QtWidgets.QLabel("Scale:"), 3, 0)
+        self.scale_widget = QtWidgets.QLineEdit()
+        grid.addWidget(self.scale_widget, 3, 1)
+        self.scale_widget.textChanged.connect(self.validate_scale)
+
+        self.warn_scale = QtWidgets.QLabel("")
+        grid.addWidget(self.warn_scale, 3, 2)
+
+        grid.addWidget(QtWidgets.QLabel("No. Decimals"), 4, 0)
+        self.decimal_widget = QtWidgets.QLineEdit()
+        grid.addWidget(self.decimal_widget, 4, 1)
+        self.decimal_widget.textChanged.connect(self.validate_decimals)
+
+        self.warn_decimals = QtWidgets.QLabel("")
+        grid.addWidget(self.warn_decimals, 4, 2)
+
+        grid.addWidget(QtWidgets.QLabel("Persist:"), 5, 0)
         self.box_widget = QtWidgets.QCheckBox()
-        grid.addWidget(self.box_widget, 2, 1)
+        grid.addWidget(self.box_widget, 5, 1)
 
         self.ok = QtWidgets.QPushButton('&Ok')
         self.ok.setEnabled(False)
@@ -58,38 +80,99 @@ class CreateEditDialog(QtWidgets.QDialog):
         self.buttons.addButton(
             self.cancel, QtWidgets.QDialogButtonBox.RejectRole)
         grid.setRowStretch(3, 1)
-        grid.addWidget(self.buttons, 4, 0, 1, 3, alignment=QtCore.Qt.AlignHCenter)
+        grid.addWidget(self.buttons, 6, 0, 1, 3, alignment=QtCore.Qt.AlignHCenter)
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
 
         self.key = key
-        self.name_widget.setText(key)
-        self.value_widget.setText(value)
-        self.box_widget.setChecked(persist)
+        if key is not None and type(value) is dict:
+            d = value
+            self.name_widget.setText(key)
+            self.value_widget.setText(dataset_to_edit_string(d))
+            self.unit_widget.setText(d["unit"])
+            self.scale_widget.setText(str(d["scale"]))
+            t = str(d["ndecimals"]) if d["ndecimals"] else ""
+            self.decimal_widget.setText(t)
+            self.box_widget.setChecked(persist)
 
     def accept(self):
         key = self.name_widget.text()
-        value = self.value_widget.text()
+        value = pyon.decode(self.value_widget.toPlainText())
         persist = self.box_widget.isChecked()
+        unit = self.unit_widget.text()
+        scale = self.scale_widget.text()
+        ndecimals = self.decimal_widget.text()
+
+        ndecimals = int(ndecimals) if ndecimals else None
+        scale = float(scale) if scale else None
+
+        if isinstance(value, (list, tuple, np.ndarray)):
+            value = np.asarray(value)
+
+        if scale is None:
+            if unit == "":
+                scale = 1.0
+            else:
+                try:
+                    scale = getattr(units, unit)
+                except AttributeError:
+                    raise KeyError("Unit {} is unknown, you must specify "
+                                   "the scale manually".format(unit))
+        data = {"value": value, "unit": unit,
+                "scale": scale, "ndecimals": ndecimals}
         if self.key and self.key != key:
-            asyncio.ensure_future(exc_to_warning(rename(self.key, key, pyon.decode(value), persist, self.dataset_ctl)))
+            asyncio.ensure_future(exc_to_warning(rename(self.key, key, data, persist, self.dataset_ctl)))
         else:
-            asyncio.ensure_future(exc_to_warning(self.dataset_ctl.set(key, pyon.decode(value), persist)))
+            asyncio.ensure_future(exc_to_warning(self.dataset_ctl.set(key, data, persist)))
         self.key = key
         QtWidgets.QDialog.accept(self)
 
     def dtype(self):
-        txt = self.value_widget.text()
+        txt = self.value_widget.toPlainText()
         try:
             result = pyon.decode(txt)
         except:
             pixmap = self.style().standardPixmap(
                 QtWidgets.QStyle.SP_MessageBoxWarning)
             self.data_type.setPixmap(pixmap)
-            self.ok.setEnabled(False)
+            self.validFields[0] = False
+            self.ok.setEnabled(False not in self.validFields)
         else:
             self.data_type.setText(type(result).__name__)
-            self.ok.setEnabled(True)
+            self.validFields[0] = True
+            self.ok.setEnabled(False not in self.validFields)
+
+    def validate_scale(self):
+        scl = self.scale_widget.text()
+        try:
+            if scl != "":
+                scl = float(scl)
+        except:
+            pixmap = self.style().standardPixmap(
+                QtWidgets.QStyle.SP_MessageBoxWarning)
+            self.warn_scale.setPixmap(pixmap)
+            self.validFields[1] = False
+            self.ok.setEnabled(False not in self.validFields)
+        else:
+            self.warn_scale.clear()
+            self.validFields[1] = True
+            self.ok.setEnabled(False not in self.validFields)
+
+    def validate_decimals(self):
+        ndec = self.decimal_widget.text()
+        try:
+            if ndec != "":
+                ndec = int(ndec)
+        except:
+            pixmap = self.style().standardPixmap(
+                QtWidgets.QStyle.SP_MessageBoxWarning)
+            self.warn_decimals.setPixmap(pixmap)
+            self.validFields[2] = False
+            self.ok.setEnabled(False not in self.validFields)
+        else:
+            self.warn_decimals.clear()
+            self.validFields[2] = True
+            self.ok.setEnabled(False not in self.validFields)
 
 
 class Model(DictSyncTreeSepModel):
@@ -171,13 +254,6 @@ class DatasetsDock(QtWidgets.QDockWidget):
             key = self.table_model.index_to_key(idx)
             if key is not None:
                 persist, value = self.table_model.backing_store[key]
-                t = type(value)
-                if np.issubdtype(t, np.number) or np.issubdtype(t, np.bool_):
-                    value = str(value)
-                elif np.issubdtype(t, np.unicode_):
-                    value = '"{}"'.format(str(value))
-                else:
-                    value = pyon.encode(value)
                 CreateEditDialog(self, self.dataset_ctl, key, value, persist).open()
 
     def delete_clicked(self):
