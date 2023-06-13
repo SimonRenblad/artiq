@@ -5,7 +5,9 @@ import numpy as np
 from PyQt5 import QtCore, QtWidgets
 from sipyco import pyon
 
-from artiq.tools import short_format, exc_to_warning
+from artiq.tools import (exc_to_warning, dataset_to_edit_string,
+                         dataset_to_string)
+from artiq.language import units
 from artiq.gui.tools import LayoutWidget, QRecursiveFilterProxyModel
 from artiq.gui.models import DictSyncTreeSepModel
 from artiq.gui.scientific_spinbox import ScientificSpinBox
@@ -100,7 +102,7 @@ class Model(DictSyncTreeSepModel):
         if column == 1:
             return "Y" if v[0] else "N"
         elif column == 2:
-            return short_format(v[1])
+            return dataset_to_string(v[1])
         else:
             raise ValueError
 
