@@ -338,7 +338,7 @@ class TitleApplet(SimpleApplet):
                 self.dataset_title.add(format_field.replace("/", "."))
             self.datasets |= self.dataset_title
 
-    def emit_data_changed(self, data, mod_buffer):
+    def emit_data_changed(self, data, unit, scale, ndecimals, mod_buffer):
         if self.args.title is not None:
             title_values = {k.replace(".", "/"): data.get(k, (False, None))[1]
                             for k in self.dataset_title}
@@ -349,4 +349,4 @@ class TitleApplet(SimpleApplet):
                 title = self.args.title
         else:
             title = None
-        self.main_widget.data_changed(data, mod_buffer, title)
+        self.main_widget.data_changed(data, unit, scale, ndecimals, mod_buffer, title)

@@ -12,9 +12,9 @@ class ProgressWidget(QtWidgets.QProgressBar):
         self.setMaximum(args.max)
         self.dataset_value = args.value
 
-    def data_changed(self, data, mods):
+    def data_changed(self, data, unit, scale, ndecimals, mods):
         try:
-            value = round(data[self.dataset_value][1])
+            value = round(data[self.dataset_value])
         except (KeyError, ValueError, TypeError):
             value = 0
         self.setValue(value)

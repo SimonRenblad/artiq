@@ -11,9 +11,9 @@ class Image(pyqtgraph.ImageView):
         pyqtgraph.ImageView.__init__(self)
         self.args = args
 
-    def data_changed(self, data, mods):
+    def data_changed(self, data, unit, scale, ndecimals, mods):
         try:
-            img = data[self.args.img][1]
+            img = data[self.args.img]
         except KeyError:
             return
         self.setImage(img)

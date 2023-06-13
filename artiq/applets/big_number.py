@@ -61,9 +61,9 @@ class NumberWidget(QtWidgets.QStackedWidget):
     def cancel_edit(self):
         self.setCurrentWidget(self.lcd_widget)
 
-    def data_changed(self, data, mods):
+    def data_changed(self, data, unit, scale, ndecimals, mods):
         try:
-            n = float(data[self.dataset_name][1])
+            n = float(data[self.dataset_name])
         except (KeyError, ValueError, TypeError):
             n = "---"
         self.lcd_widget.display(n)

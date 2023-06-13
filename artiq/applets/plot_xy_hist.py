@@ -124,11 +124,11 @@ class XYHistPlot(QtWidgets.QSplitter):
                 return False
         return True
 
-    def data_changed(self, data, mods):
+    def data_changed(self, data, unit, scale, ndecimals, mods):
         try:
-            xs = data[self.args.xs][1]
-            histogram_bins = data[self.args.histogram_bins][1]
-            histograms_counts = data[self.args.histograms_counts][1]
+            xs = data[self.args.xs]
+            histogram_bins = data[self.args.histogram_bins]
+            histograms_counts = data[self.args.histograms_counts]
         except KeyError:
             return
         if len(xs) != histograms_counts.shape[0]:
