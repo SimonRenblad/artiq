@@ -14,44 +14,31 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.setSceneRect(0, 0, 100, 100)
         self.setBackgroundBrush(QtCore.Qt.black)
         
-        self.channels = set()
+        self.channels = []
 
         self.data = collections.defaultdict(lambda: collections.defaultdict(list))
 
-        self.data = {0: {0: [(0, 0), (1, 10), (0, 20)], 1: [(0, 0), (1, 20), (0, 40)]}} 
-        self.channels.add(0)
+        self.data = {"main_channel": {0: [(0, 0), (1, 10), (0, 20)], 1: [(0, 0), (1, 20), (0, 40)]}} 
 
         self.x_scale, self.y_scale, self.row_scale = 10, 10, 2
-        self.x_offset, self.y_offset = 0, 0
+        self.x_offset, self.y_offset = 0, 0 
 
         self.display_graph()
 
         self.left_mouse_pressed = False
+    
+    # Override
+    def wheelEvent(self, event):
+        self.x_offset += event.delta()
+        self.refresh_display()
 
-    # # Override
-    # def mousePressEvent(self, event):
-    #     if event.button() == QtCore.Qt.LeftButton:
-    #         self.left_mouse_pressed = True
-    #         self.pan_start_x = event.scenePos().x()
-    #         self.pan_start_y = event.scenePos().y()
+    def refresh_display(self):
+        self.clear()
+        self.display_graph()
 
-    # # Override
-    # def mouseReleaseEvent(self, event):
-    #     if event.button() == QtCore.Qt.LeftButton:
-    #         self.left_mouse_pressed = False
-
-    # # Override
-    # def mouseMoveEvent(self, event):
-    #     if self.left_mouse_pressed:
-    #         x = event.scenePos().x()
-    #         y = event.scenePos().y()
-    #         self.x_offset += x - self.pan_start_x
-    #         self.y_offset += y - self.pan_start_y
-    #         self.pan_start_x = x
-    #         self.pan_start_y = y
-    #         self.clear()
-    #         self.display_graph()
-
+    def update_channels(self, channels):
+        self.channels = channels
+        self.refresh_display()
 
     def load_dump(self, dump):
         for message in dump.messages:
@@ -59,7 +46,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
             self.data[message.channel][message.address].append((message.data, message.timestamp))
 
     def display_graph(self):
-        for channel in sorted(list(self.channels)):
+        for channel in self.channels:
             self._display_channel(channel)
 
     def _display_channel(self, channel):
@@ -88,18 +75,37 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         return (rx1, ry1, rx2, ry2)
 
 class WaveformChannelList(QtWidgets.QListWidget):
+    add_channel_signal = QtCore.pyqtSignal(str)
+
     def __init__(self):
         QtWidgets.QListWidget.__init__(self)
 
-        self.channels = ["ab", "bc", "de"]
-        model = QtGui.QStandardItemModel()
+        self.channels = ["main_channel"]
         for channel in self.channels:
-            model.appendRow(QtWidgets.QStandardItem(channel))
+            self.addItem(channel)
 
-        self.itemDoubleClicked.connect(self.double_clicked)
+        self.itemDoubleClicked.connect(self.emit_add_channel)
 
-    def double_clicked(self, item):
-        print(item.text())
+    def emit_add_channel(self, item):
+        s = item.text()
+        self.add_channel_signal.emit(s)
+
+class WaveformActiveChannelView(QtWidgets.QTreeWidget):
+    update_channels_signal = QtCore.pyqtSignal(list)
+
+    def __init__(self):
+        QtWidgets.QTreeView.__init__(self)
+        self.channels = []
+
+    def add_channel(self, name):
+        item = QtWidgets.QTreeWidgetItem([name])
+        self.channels.append(name)
+        self.addTopLevelItem(item)
+        self.update_channels()
+
+    def update_channels(self):
+        self.update_channels_signal.emit(self.channels)
+        
 
 class WaveformDock(QtWidgets.QDockWidget):
     def __init__(self):
@@ -114,24 +120,17 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.temp_label = QtWidgets.QLabel("temporary label")
         grid.addWidget(self.temp_label, 0, 0)
 
-        # self.waveform_widget = _WaveformWidget()
-        # grid.addWidget(self.waveform_widget, 1, 0)
-
-        self.waveform_scene = WaveformScene() 
-
         self.waveform_channel_list = WaveformChannelList()
-
         grid.addWidget(self.waveform_channel_list, 1, 0)
 
+        self.waveform_active_channel_view = WaveformActiveChannelView()
+        grid.addWidget(self.waveform_active_channel_view, 2, 0)
+
+        self.waveform_scene = WaveformScene() 
         self.waveform_view = QtWidgets.QGraphicsView(self.waveform_scene)
-        grid.addWidget(self.waveform_view, 1, 1)
+        grid.addWidget(self.waveform_view, 1, 1, rowspan=2)
 
+        self.waveform_view.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
 
-
-# class _WaveformWidget(pg.PlotWidget):
-#     def __init__(self):
-#         pg.PlotWidget.__init__(self)
-#         self.text = pg.TextItem("")
-#         self.x = np.asarray([1,2,3,4])
-#         self.y = np.asarray([0,1,1,0])
-#         self.plot(self.x, self.y)
+        self.waveform_channel_list.add_channel_signal.connect(self.waveform_active_channel_view.add_channel)
+        self.waveform_active_channel_view.update_channels_signal.connect(self.waveform_scene.update_channels)
