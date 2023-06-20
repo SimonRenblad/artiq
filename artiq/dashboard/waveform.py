@@ -196,7 +196,133 @@ class AddChannelDialog(QtWidgets.QDialog):
         self.add_channel_signal.emit(name) 
         self.close()
 
-class WaveformActiveChannelView(QtWidgets.QTreeWidget):
+# Modified from https://github.com/futal/simpletreemodel/blob/master/simpletreemodel.py
+class TreeItem:
+    def __init__(self, data, parent=None):
+        self._item_data = data
+        self._parent_item = parent
+        self._child_items = []
+
+    def appendChild(self, item):
+        self._child_items.append(item)
+
+    def child(self, row):
+        return self._child_items[row]
+
+    def childCount(self):
+        return len(self._child_items)
+
+    def columnCount(self):
+        return len(self._item_data)
+
+    def data(self):
+        if not self._item_data:
+            return QtCore.QVariant()
+        return QtCore.QVariant(self._item_data)
+
+    def parent(self):
+        return self._parent_item
+
+    def row(self):
+        if self._parent_item:
+            return self._parent_item._child_items.index(self)
+        return 0
+
+# TODO: Implement model
+class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.active_channels = {} 
+        self._root_item = TreeItem('Channel')
+        self._root_item.appendChild(TreeItem('main_channel'))
+
+    def flags(self, index):
+        if not index.isValid():
+            return 0
+        return QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsDropEnabled | QtCore.Qt.ItemIsEditable | index.flags()
+
+    def data(self, index, role):
+        if not index.isValid():
+            return QtCore.QVariant()
+        item = index.internalPointer()  
+        if role == QtCore.Qt.DisplayRole:
+            return QtCore.QVariant(item.data())
+
+    def index(self, row, column, parent=QtCore.QModelIndex()):
+        if not self.hasIndex(row, column, parent):
+            return QtCore.QModelIndex()
+        if not parent.isValid():
+            parent_item = self._root_item
+        else:
+            parent_item = parent.internalPointer()
+        child_item = parent_item.child(row)
+        if child_item:
+            return self.createIndex(row, column, child_item)
+        else:
+            return QtCore.QModelIndex()
+
+    def parent(self, index):
+       if not index.isValid():
+          return QModelIndex()
+       child_item = index.internalPointer()
+       if not child_item:
+          return QModelIndex()
+       parent_item = child_item.parent()
+       if parent_item == self._root_item:
+          return QModelIndex()
+       return self.createIndex(parent_item.row(), 0, parent_item)
+
+    def headerData(self, section, orientation, role):
+        return ["Channels"]
+
+    def rowCount(self, parent=QtCore.QModelIndex()):
+        if parent.isValid():
+            return parent.internalPointer().childCount()
+        return self._root_item.childCount()
+
+    def columnCount(self, parent=QtCore.QModelIndex()):
+        return 1
+
+    def supportedDragActions():
+        return QtCore.Qt.MoveAction
+
+    def supportedDropActions():
+        return QtCore.Qt.MoveAction
+
+    # must emit dataChanged signal
+    # def setData(self, index, value, role):
+    #     pass
+
+    # def setItemData(self, index, role):
+    #     pass
+
+    # must emit headerDataChanged signal
+    # def setHeaderData(self, section, orientation, value, role):
+    #     pass
+    
+    # necessary for drag drop
+    # emit layoutAboutToBeChanged and layoutChanged
+    # def insertRows(self, row, count, parent=QModelIndex()):
+    #     self.beginInsertRows(parent, row, row) 
+    #     self.endInsertRows()
+
+    # def insertColumns(self, column, count, parent=QModelIndex()):
+    #     pass
+
+    # def removeRows(self, row, count, parent=QModelIndex()):
+    #     pass
+
+    # def removeRow(self, row, parent=QModelIndex()):
+    #     pass
+
+    # def removeColumns(self, column, count, parent=QModelIndex()):
+    #     pass
+
+    # def removeColumn(self, column, parent=QModelIndex()):
+    #     pass
+
+class WaveformActiveChannelView(QtWidgets.QTreeView):
     update_active_channels_signal = QtCore.pyqtSignal(list)
 
     def __init__(self):
@@ -205,16 +331,15 @@ class WaveformActiveChannelView(QtWidgets.QTreeWidget):
         self.channels = ["main_channel"]
         self.channel_size_map = {"main_channel": 8}
         self.setMaximumWidth(150)
-        self.setHeaderLabel("Channels")
         self.setIndentation(5)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setDragEnabled(True)
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
-        self.viewport().setAcceptDrops(True)
+        self.setModel(WaveformActiveChannelModel())
 
-        invis_root = self.invisibleRootItem()
-        invis_root.setFlags(invis_root.flags() | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsDropEnabled)
+        # invis_root = self.invisibleRootItem()
+        # invis_root.setFlags(invis_root.flags() | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsDropEnabled)
         
         self.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
         add_channel = QtWidgets.QAction("Add channel", self)
@@ -244,10 +369,6 @@ class WaveformActiveChannelView(QtWidgets.QTreeWidget):
 
     def update_active_channels(self):
         self.update_active_channels_signal.emit(self.active_channels)
-
-    # Override
-    def supportedDropActions(self):
-        return QtCore.Qt.MoveAction
 
     # Override
     def dropEvent(self, event):
