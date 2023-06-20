@@ -1,4 +1,6 @@
 from PyQt5 import QtCore, QtWidgets, QtGui
+from PyQt5.QtCore import Qt
+
 from artiq.gui.tools import LayoutWidget
 import numpy as np
 import pyqtgraph as pg
@@ -15,7 +17,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.width, self.height = 100, 100
 
         self.setSceneRect(0, 0, 100, 100)
-        self.setBackgroundBrush(QtCore.Qt.black)
+        self.setBackgroundBrush(Qt.black)
         
         self.channels = []
 
@@ -37,9 +39,9 @@ class WaveformScene(QtWidgets.QGraphicsScene):
 
     def display_scale(self):
         pen = QtGui.QPen()
-        pen.setStyle(QtCore.Qt.SolidLine)
+        pen.setStyle(Qt.SolidLine)
         pen.setWidth(1)
-        pen.setBrush(QtCore.Qt.blue)
+        pen.setBrush(Qt.blue)
 
         font = QtGui.QFont("Monospace", pointSize=7)
 
@@ -60,7 +62,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
             self.addLine(self._transform_x(t), 0, self._transform_x(t), len(self.channels)*self.row_scale*self.y_scale + vert_line_extra_length, pen)
             txt = self.addText(str(t) + " " + self.timescale_unit, font)
             txt.setPos(self._transform_x(t), 0)
-            txt.setDefaultTextColor(QtGui.QColor(QtCore.Qt.blue))
+            txt.setDefaultTextColor(QtGui.QColor(Qt.blue))
             t += self.timescale
     
     # Override
@@ -102,14 +104,14 @@ class WaveformScene(QtWidgets.QGraphicsScene):
 
     def _display_channel(self, channel, subchannels, row):
         pen = QtGui.QPen()
-        pen.setStyle(QtCore.Qt.SolidLine)
+        pen.setStyle(Qt.SolidLine)
         pen.setWidth(1)
-        pen.setBrush(QtCore.Qt.green)
+        pen.setBrush(Qt.green)
 
         sub_pen = QtGui.QPen()
-        sub_pen.setStyle(QtCore.Qt.SolidLine)
+        sub_pen.setStyle(Qt.SolidLine)
         sub_pen.setWidth(1)
-        sub_pen.setBrush(QtCore.Qt.darkGreen)
+        sub_pen.setBrush(Qt.darkGreen)
        
         messages = self.data[channel]
         current_value = messages[0][0]
@@ -240,13 +242,13 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
     def flags(self, index):
         if not index.isValid():
             return 0
-        return QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsDropEnabled | QtCore.Qt.ItemIsEditable | index.flags()
+        return Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsEnabled | Qt.ItemIsSelectable
 
     def data(self, index, role):
         if not index.isValid():
             return QtCore.QVariant()
         item = index.internalPointer()  
-        if role == QtCore.Qt.DisplayRole:
+        if role == Qt.DisplayRole:
             return QtCore.QVariant(item.data())
 
     def index(self, row, column, parent=QtCore.QModelIndex()):
@@ -264,13 +266,15 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
 
     def parent(self, index):
        if not index.isValid():
-          return QModelIndex()
+          return QtCore.QModelIndex()
        child_item = index.internalPointer()
        if not child_item:
-          return QModelIndex()
+          return QtCore.QModelIndex()
        parent_item = child_item.parent()
        if parent_item == self._root_item:
-          return QModelIndex()
+          return QtCore.QModelIndex()
+       if not parent_item:
+           return QtCore.QModelIndex()
        return self.createIndex(parent_item.row(), 0, parent_item)
 
     def headerData(self, section, orientation, role):
@@ -284,18 +288,17 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
     def columnCount(self, parent=QtCore.QModelIndex()):
         return 1
 
-    def supportedDragActions():
-        return QtCore.Qt.MoveAction
+    def supportedDragActions(self):
+        return Qt.MoveAction
 
-    def supportedDropActions():
-        return QtCore.Qt.MoveAction
+    def supportedDropActions(self):
+        return Qt.MoveAction
 
-    # must emit dataChanged signal
-    # def setData(self, index, value, role):
-    #     pass
-
-    # def setItemData(self, index, role):
-    #     pass
+    def addChannel(self, channel):
+        row = self.rowCount()
+        self.beginInsertRows(QtCore.QModelIndex(), row, row)
+        self._root_item.appendChild(TreeItem(channel))
+        self.endInsertRows()
 
     # must emit headerDataChanged signal
     # def setHeaderData(self, section, orientation, value, role):
@@ -336,16 +339,17 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
         self.setDragEnabled(True)
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
-        self.setModel(WaveformActiveChannelModel())
+        self.model = WaveformActiveChannelModel()
+        self.setModel(self.model)
 
         # invis_root = self.invisibleRootItem()
-        # invis_root.setFlags(invis_root.flags() | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsDropEnabled)
+        # invis_root.setFlags(invis_root.flags() | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
         
-        self.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
+        self.setContextMenuPolicy(Qt.ActionsContextMenu)
         add_channel = QtWidgets.QAction("Add channel", self)
         add_channel.triggered.connect(self.add_channel_widget)
         add_channel.setShortcut("CTRL+N")
-        add_channel.setShortcutContext(QtCore.Qt.WidgetShortcut)
+        add_channel.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel)
 
         self.add_channel_dialog = AddChannelDialog(self)
@@ -355,23 +359,25 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
         self.add_channel_dialog.open()
 
     def add_active_channel(self, name):
-        item = QtWidgets.QTreeWidgetItem([name])
-        channel_size = self.channel_size_map[name]
-        if channel_size > 1:
-            self.active_channels.append([name] + list(range(channel_size)))
-        else:
-            self.active_channels.append([name])
-        for sbc in self.active_channels[-1][1:]:
-            child = QtWidgets.QTreeWidgetItem([name + "[" + str(sbc) + "]"])
-            item.addChild(child)
-        self.addTopLevelItem(item)
-        self.update_active_channels()
+        self.model.addChannel(name)
+        # item = QtWidgets.QTreeWidgetItem([name])
+        # channel_size = self.channel_size_map[name]
+        # if channel_size > 1:
+        #     self.active_channels.append([name] + list(range(channel_size)))
+        # else:
+        #     self.active_channels.append([name])
+        # for sbc in self.active_channels[-1][1:]:
+        #     child = QtWidgets.QTreeWidgetItem([name + "[" + str(sbc) + "]"])
+        #     item.addChild(child)
+        # self.addTopLevelItem(item)
+        # self.update_active_channels()
 
     def update_active_channels(self):
         self.update_active_channels_signal.emit(self.active_channels)
 
     # Override
     def dropEvent(self, event):
+        print(event)
         if event.mimeData().hasFormat("text/plain"):
             passedData = event.mimeData().text()
             event.acceptProposedAction()
@@ -379,13 +385,12 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
     # Override
     def startDrag(self, allowableActions):
         drag = QtGui.QDrag(self)
-        selectedItems = self.selectedItems()
-        if len(selectedItems) < 1:
+        selected_indexes = self.selectionModel().selectedIndexes()
+        if len(selected_indexes) < 1:
             return
-        selectedTreeWidgetItem = selectedItems[0]
-        dragAndDropName = selectedTreeWidgetItem.text(0)
+        start_row = selected_indexes[0].row()
         mimedata = QtCore.QMimeData()
-        mimedata.setText(dragAndDropName)        
+        mimedata.setText(str(start_row))        
         drag.setMimeData(mimedata)
         drag.exec_(allowableActions)
 
@@ -421,7 +426,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.waveform_view = QtWidgets.QGraphicsView(self.waveform_scene)
         grid.addWidget(self.waveform_view, 1, 1)
 
-        self.waveform_view.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        self.waveform_view.setAlignment(Qt.AlignTop | Qt.AlignLeft)
 
         self.waveform_active_channel_view.update_active_channels_signal.connect(self.waveform_scene.update_channels)
         
