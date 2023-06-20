@@ -13,6 +13,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
     def __init__(self, parent=None):
         QtWidgets.QGraphicsScene.__init__(self, parent)
         self.width, self.height = 100, 100
+
         self.setSceneRect(0, 0, 100, 100)
         self.setBackgroundBrush(QtCore.Qt.black)
         
@@ -27,7 +28,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.timescale = 1
 
         self.start_time = 0
-        self.end_time = 40
+        self.end_time = 0
 
         self.refresh_display()
 
@@ -46,6 +47,8 @@ class WaveformScene(QtWidgets.QGraphicsScene):
 
         small_tick_height = 8
 
+        vert_line_extra_length = 500
+
         num_small_tick = 10 # should be factor of x_scale
         x_start = self._transform_x(self.start_time)
         x_end = self._transform_x(self.end_time)
@@ -54,7 +57,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         
         t = self.start_time
         while t < self.end_time:
-            self.addLine(self._transform_x(t), 0, self._transform_x(t), len(self.channels)*self.row_scale*self.y_scale + 100, pen)
+            self.addLine(self._transform_x(t), 0, self._transform_x(t), len(self.channels)*self.row_scale*self.y_scale + vert_line_extra_length, pen)
             txt = self.addText(str(t) + " " + self.timescale_unit, font)
             txt.setPos(self._transform_x(t), 0)
             txt.setDefaultTextColor(QtGui.QColor(QtCore.Qt.blue))
@@ -75,7 +78,17 @@ class WaveformScene(QtWidgets.QGraphicsScene):
 
     def update_channels(self, channels):
         self.channels = channels
+        self.end_time = self._get_max_time()
         self.refresh_display()
+
+    def _get_max_time(self):
+        max_time = 0
+        for channel, messages in self.data.items():
+            if channel in [x[0] for x in self.channels]:
+               new_time = messages[-1][1]
+               if new_time > max_time:
+                   max_time = new_time
+        return max_time
 
     def load_dump(self, dump):
         for message in dump.messages:
@@ -152,7 +165,7 @@ class WaveformChannelList(QtWidgets.QListWidget):
     def __init__(self):
         QtWidgets.QListWidget.__init__(self)
 
-        self.channels = {"main_channel": [0, 1]}
+        self.channels = ["main_channel"]
         for channel in self.channels:
             self.addItem(channel)
 
@@ -189,10 +202,19 @@ class WaveformActiveChannelView(QtWidgets.QTreeWidget):
     def __init__(self):
         QtWidgets.QTreeView.__init__(self)
         self.active_channels = []
-        self.channels = {"main_channel": [0, 1]}
+        self.channels = ["main_channel"]
+        self.channel_size_map = {"main_channel": 8}
         self.setMaximumWidth(150)
         self.setHeaderLabel("Channels")
         self.setIndentation(5)
+        self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.setDragEnabled(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
+        self.viewport().setAcceptDrops(True)
+
+        invis_root = self.invisibleRootItem()
+        invis_root.setFlags(invis_root.flags() | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsDropEnabled)
         
         self.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
         add_channel = QtWidgets.QAction("Add channel", self)
@@ -209,8 +231,12 @@ class WaveformActiveChannelView(QtWidgets.QTreeWidget):
 
     def add_active_channel(self, name):
         item = QtWidgets.QTreeWidgetItem([name])
-        self.active_channels.append([name] + [x for x in self.channels[name]])
-        for sbc in self.channels[name]:
+        channel_size = self.channel_size_map[name]
+        if channel_size > 1:
+            self.active_channels.append([name] + list(range(channel_size)))
+        else:
+            self.active_channels.append([name])
+        for sbc in self.active_channels[-1][1:]:
             child = QtWidgets.QTreeWidgetItem([name + "[" + str(sbc) + "]"])
             item.addChild(child)
         self.addTopLevelItem(item)
@@ -218,6 +244,36 @@ class WaveformActiveChannelView(QtWidgets.QTreeWidget):
 
     def update_active_channels(self):
         self.update_active_channels_signal.emit(self.active_channels)
+
+    # Override
+    def supportedDropActions(self):
+        return QtCore.Qt.MoveAction
+
+    # Override
+    def dropEvent(self, event):
+        if event.mimeData().hasFormat("text/plain"):
+            passedData = event.mimeData().text()
+            event.acceptProposedAction()
+    
+    # Override
+    def startDrag(self, allowableActions):
+        drag = QtGui.QDrag(self)
+        selectedItems = self.selectedItems()
+        if len(selectedItems) < 1:
+            return
+        selectedTreeWidgetItem = selectedItems[0]
+        dragAndDropName = selectedTreeWidgetItem.text(0)
+        mimedata = QtCore.QMimeData()
+        mimedata.setText(dragAndDropName)        
+        drag.setMimeData(mimedata)
+        drag.exec_(allowableActions)
+
+    # Override
+    def mimeTypes(self):
+        mimetypes = QtGui.QTreeWidget.mimeTypes(self)
+        mimetypes.append("text/plain")
+        return mimetypes
+
 
 
 class WaveformDock(QtWidgets.QDockWidget):
