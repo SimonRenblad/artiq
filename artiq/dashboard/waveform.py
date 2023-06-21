@@ -6,6 +6,7 @@ import numpy as np
 import pyqtgraph as pg
 import collections
 import math
+import itertools
 
 import logging
 
@@ -200,16 +201,23 @@ class AddChannelDialog(QtWidgets.QDialog):
 
 # Modified from https://github.com/futal/simpletreemodel/blob/master/simpletreemodel.py
 class TreeItem:
+    id_obj = itertools.count(1)
+
     def __init__(self, data, parent=None):
+        self.id = next(TreeItem.id_obj)
         self._item_data = data
         self._parent_item = parent
         self._child_items = []
 
     def appendChild(self, item):
+        item._parent_item = self
         self._child_items.append(item)
 
     def child(self, row):
         return self._child_items[row]
+
+    def children(self):
+        return self._child_items
 
     def childCount(self):
         return len(self._child_items)
@@ -233,6 +241,17 @@ class TreeItem:
             return self._parent_item._child_items.index(self)
         return 0
 
+    def insertChild(self, row, item):
+        self._child_items.insert(row, item)
+
+    def pop(self, row):
+        return self._child_items.pop(row)
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        return self.id == other.id
+
 # TODO: Implement model
 class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
 
@@ -240,7 +259,6 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         super().__init__(parent)
         self.active_channels = {} 
         self._root_item = TreeItem('Channel')
-        self._root_item.appendChild(TreeItem('main_channel'))
 
     def flags(self, index):
         defaultFlags = QtCore.QAbstractItemModel.flags(self, index)
@@ -304,18 +322,27 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         self._root_item.appendChild(TreeItem(channel))
         self.endInsertRows()
 
-    # must emit headerDataChanged signal
-    # def setHeaderData(self, section, orientation, value, role):
-    #     pass
-    
-    # necessary for drag drop
-    # emit layoutAboutToBeChanged and layoutChanged
-    def insertRows(self, row, count, parent=QtCore.QModelIndex()):
-        self.beginInsertRows(parent, row, row) 
+    def insertRows(self, row, count, index):
+        if count != 1:
+            return False
+        if not index.parent().isValid():
+            return False
+        parent_item = index.parent().internalPointer()
+        self.beginInsertRows(QtCore.QModelIndex(), row, row)
+        parent_item.insertChild(row, TreeItem(''))
         self.endInsertRows()
+        return True
 
-    def insertColumns(self, column, count, parent=QtCore.QModelIndex()):
-        return
+    def removeRows(self, row, count, index):
+        if count != 1:
+            return False
+        if not index.parent().isValid():
+            return False
+        parent_item = index.parent().internalPointer()
+        self.beginRemoveRows(QtCore.QModelIndex(), row, row)
+        parent_item.pop(row)
+        self.endRemoveRows()
+        return True
 
     def setData(self, index, value, role):
         if not index.isValid():
@@ -341,7 +368,7 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         for index in indexes:
             if index.isValid():
                 item = index.internalPointer()
-                stream << item.data()
+                stream.writeInt32(item.id)
         mimedata.setData('application/x-qabstractitemmodeldatalist', encoded_data)
         return mimedata
 
@@ -353,21 +380,44 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         if column > 0:
             return False
         if not parent.isValid():
-            parent_item = self._root_item
-        else:
-            parent_item = parent.internalPointer()
+            return False
+        dest_item = parent.internalPointer()
+        print("dest_item id", dest_item.id)
+        parent_item = dest_item.parent()
+        print("parent_item id", parent_item.id)
         encoded_data = mimedata.data('application/x-qabstractitemmodeldatalist')
         stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.ReadOnly)
-        new_items = []
-        while not stream.atEnd():
-            name = str()
-            name = stream.readQString()
-            new_items.append(name)
-        self.beginInsertRows(parent, row, row + len(new_items) - 1)
-        for name in new_items:
-            parent_item.appendChild(TreeItem(name))
+        source_id = stream.readInt32() 
+        source_item = None
+        for item in parent_item.children():
+            if item.id == source_id:
+                source_item = item
+                break
+        if source_item is None:
+            return False
+
+        print("source_item id", source_item.id)
+
+        if source_item == dest_item:
+            print("same node")
+            return False
+        
+        source_row = int(source_item.row())
+        dest_row = int(dest_item.row())
+        target_row = dest_row
+        if dest_row > source_row:
+            target_row += 1
+        else:
+            source_row += 1
+        self.beginInsertRows(parent.parent(), target_row, target_row)
+        parent_item.insertChild(target_row, source_item)
         self.endInsertRows()
-        return True
+
+        self.beginRemoveRows(parent.parent(), source_row, source_row)
+        parent_item.pop(source_row) 
+        self.endRemoveRows()
+        return True   
+
     # def removeRows(self, row, count, parent=QModelIndex()):
     #     pass
 
