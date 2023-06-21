@@ -222,6 +222,9 @@ class TreeItem:
             return QtCore.QVariant()
         return QtCore.QVariant(self._item_data)
 
+    def setData(self, value):
+        self._item_data = value
+
     def parent(self):
         return self._parent_item
 
@@ -240,9 +243,10 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         self._root_item.appendChild(TreeItem('main_channel'))
 
     def flags(self, index):
+        defaultFlags = QtCore.QAbstractItemModel.flags(self, index)
         if not index.isValid():
-            return 0
-        return Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsEnabled | Qt.ItemIsSelectable
+            return defaultFlags
+        return QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsDropEnabled | QtCore.Qt.ItemIsEditable | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled | defaultFlags
 
     def data(self, index, role):
         if not index.isValid():
@@ -306,13 +310,64 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
     
     # necessary for drag drop
     # emit layoutAboutToBeChanged and layoutChanged
-    # def insertRows(self, row, count, parent=QModelIndex()):
-    #     self.beginInsertRows(parent, row, row) 
-    #     self.endInsertRows()
+    def insertRows(self, row, count, parent=QtCore.QModelIndex()):
+        self.beginInsertRows(parent, row, row) 
+        self.endInsertRows()
 
-    # def insertColumns(self, column, count, parent=QModelIndex()):
-    #     pass
+    def insertColumns(self, column, count, parent=QtCore.QModelIndex()):
+        return
 
+    def setData(self, index, value, role):
+        if not index.isValid():
+            return
+        item = index.internalPointer()  
+        item.setData(value)
+        return
+
+    def setItemData(self, index, roles):
+        if not index.isValid():
+            return
+        item = index.internalPointer()
+        if Qt.DisplayRole in roles.keys():
+            item.setData(roles[Qt.DisplayRole])
+    
+    def mimeTypes(self):
+        return ['application/x-qabstractitemmodeldatalist']
+
+    def mimeData(self, indexes):
+        mimedata = QtCore.QMimeData()
+        encoded_data = QtCore.QByteArray()
+        stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.WriteOnly)
+        for index in indexes:
+            if index.isValid():
+                item = index.internalPointer()
+                stream << item.data()
+        mimedata.setData('application/x-qabstractitemmodeldatalist', encoded_data)
+        return mimedata
+
+    def dropMimeData(self, mimedata, action, row, column, parent):
+        if action == Qt.IgnoreAction:
+            return True
+        if not mimedata.hasFormat('application/x-qabstractitemmodeldatalist'):
+            return False
+        if column > 0:
+            return False
+        if not parent.isValid():
+            parent_item = self._root_item
+        else:
+            parent_item = parent.internalPointer()
+        encoded_data = mimedata.data('application/x-qabstractitemmodeldatalist')
+        stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.ReadOnly)
+        new_items = []
+        while not stream.atEnd():
+            name = str()
+            name = stream.readQString()
+            new_items.append(name)
+        self.beginInsertRows(parent, row, row + len(new_items) - 1)
+        for name in new_items:
+            parent_item.appendChild(TreeItem(name))
+        self.endInsertRows()
+        return True
     # def removeRows(self, row, count, parent=QModelIndex()):
     #     pass
 
@@ -376,29 +431,28 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
         self.update_active_channels_signal.emit(self.active_channels)
 
     # Override
-    def dropEvent(self, event):
-        print(event)
-        if event.mimeData().hasFormat("text/plain"):
-            passedData = event.mimeData().text()
-            event.acceptProposedAction()
-    
-    # Override
-    def startDrag(self, allowableActions):
-        drag = QtGui.QDrag(self)
-        selected_indexes = self.selectionModel().selectedIndexes()
-        if len(selected_indexes) < 1:
-            return
-        start_row = selected_indexes[0].row()
-        mimedata = QtCore.QMimeData()
-        mimedata.setText(str(start_row))        
-        drag.setMimeData(mimedata)
-        drag.exec_(allowableActions)
+    # def dropEvent(self, event):
+    #     print(event)
+    #     if event.mimeData().hasFormat("text/plain"):
+    #         passedData = event.mimeData().text()
+    #         event.acceptProposedAction()
+    # 
+    # # Override
+    # def startDrag(self, allowableActions):
+    #     drag = QtGui.QDrag(self)
+    #     selected_indexes = self.selectionModel().selectedIndexes()
+    #     if len(selected_indexes) < 1:
+    #         return
+    #     start_row = selected_indexes[0]
+    #     mimedata = QtCore.QMimeData(start_row)
+    #     drag.setMimeData(mimedata)
+    #     drag.exec_(allowableActions)
 
     # Override
-    def mimeTypes(self):
-        mimetypes = QtGui.QTreeWidget.mimeTypes(self)
-        mimetypes.append("text/plain")
-        return mimetypes
+    # def mimeTypes(self):
+    #    mimetypes = QtGui.QTreeWidget.mimeTypes(self)
+    #    mimetypes.append("text/plain")
+    #    return mimetypes
 
 
 
