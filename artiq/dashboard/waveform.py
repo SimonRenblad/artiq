@@ -251,6 +251,7 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
         QtWidgets.QTreeView.__init__(self)
 
         self.channel_mgr = channel_mgr
+        self.channel_mgr.activeChannelsChanged.connect(self.update_channels)
         
         self.active_channels = []
         self.channels = ["main_channel", "side_channel"]
@@ -340,6 +341,8 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         QtWidgets.QGraphicsScene.__init__(self, parent)
 
         self.channel_mgr = channel_mgr
+
+        self.channel_mgr.activeChannelsChanged.connect(self.update_channels)
 
         self.width, self.height = 100, 100
 
@@ -509,13 +512,26 @@ class ChannelManager():
     activeChannelsChanged = QtCore.pyqtSignal(list)
 
     def __init__(self):
-        self.data = {}
+        self.data = {
+            "main_channel": [(0,0),(1,10),(0,20)],
+            "side_channel": [(0,0),(1,10),(0,20)],
+        }
+        self.size = {
+            "main_channel": 1,
+            "side_channel": 1,
+        }
         self.active_channels = []
 
     def _broadcast(self):
         self.activeChannelsChanged.emit(self.active_channels)
     
     def add_channel(self, channel):
+        self.active_channels.append(channel)
+        self._broadcast()
+        return channel.id
+
+    def add_channel_by_name(self, name):
+        channel = Channel(name, self.size[name])
         self.active_channels.append(channel)
         self._broadcast()
         return channel.id
@@ -566,7 +582,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
                          QtWidgets.QDockWidget.DockWidgetFloatable)
        
-        channel_mgr = ChannelManager()
+        self.channel_mgr = ChannelManager()
 
         grid = LayoutWidget()
         self.setWidget(grid)
@@ -586,8 +602,6 @@ class WaveformDock(QtWidgets.QDockWidget):
         grid.addWidget(self.waveform_view, 1, 1)
 
         self.waveform_view.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-
-        self.waveform_active_channel_view.update_active_channels_signal.connect(self.waveform_scene.update_channels)
         
         self.zoom_in_button.clicked.connect(self.waveform_scene.decrease_timescale)
         self.zoom_out_button.clicked.connect(self.waveform_scene.increase_timescale)
