@@ -252,13 +252,23 @@ class TreeItem:
             return False
         return self.id == other.id
 
-# TODO: Implement model
 class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
+    moveFinished = QtCore.pyqtSignal(QtCore.QModelIndex)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.active_channels = {} 
         self._root_item = TreeItem('Channel')
+        self.beginInsertRows(QtCore.QModelIndex(), 0, 3)
+        item1 = TreeItem('1')
+        item2 = TreeItem('2')
+        item3 = TreeItem('3')
+        item4 = TreeItem('4')
+        self._root_item.appendChild(item1)
+        self._root_item.appendChild(item2)
+        self._root_item.appendChild(item3)
+        self._root_item.appendChild(item4)
+        self.endInsertRows()
 
     def flags(self, index):
         defaultFlags = QtCore.QAbstractItemModel.flags(self, index)
@@ -322,34 +332,34 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         self._root_item.appendChild(TreeItem(channel))
         self.endInsertRows()
 
-    def insertRows(self, row, count, index):
-        if count != 1:
-            return False
-        if not index.parent().isValid():
-            return False
-        parent_item = index.parent().internalPointer()
-        self.beginInsertRows(QtCore.QModelIndex(), row, row)
-        parent_item.insertChild(row, TreeItem(''))
-        self.endInsertRows()
-        return True
+    # def insertRows(self, row, count, index):
+    #     if count != 1:
+    #         return False
+    #     if not index.parent().isValid():
+    #         return False
+    #     parent_item = index.parent().internalPointer()
+    #     self.beginInsertRows(QtCore.QModelIndex(), row, row)
+    #     parent_item.insertChild(row, TreeItem(''))
+    #     self.endInsertRows()
+    #     return True
 
-    def removeRows(self, row, count, index):
-        if count != 1:
-            return False
-        if not index.parent().isValid():
-            return False
-        parent_item = index.parent().internalPointer()
-        self.beginRemoveRows(QtCore.QModelIndex(), row, row)
-        parent_item.pop(row)
-        self.endRemoveRows()
-        return True
+    # def removeRows(self, row, count, index):
+    #     if count != 1:
+    #         return False
+    #     if not index.parent().isValid():
+    #         return False
+    #     parent_item = index.parent().internalPointer()
+    #     self.beginRemoveRows(QtCore.QModelIndex(), row, row)
+    #     parent_item.pop(row)
+    #     self.endRemoveRows()
+    #     return True
 
     def setData(self, index, value, role):
         if not index.isValid():
             return
         item = index.internalPointer()  
         item.setData(value)
-        return
+        return True
 
     def setItemData(self, index, roles):
         if not index.isValid():
@@ -409,26 +419,12 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
             target_row += 1
         else:
             source_row += 1
-        self.beginInsertRows(parent.parent(), target_row, target_row)
+        self.beginMoveRows(parent.parent(), target_row, target_row, parent.parent(), source_row)
         parent_item.insertChild(target_row, source_item)
-        self.endInsertRows()
-
-        self.beginRemoveRows(parent.parent(), source_row, source_row)
         parent_item.pop(source_row) 
-        self.endRemoveRows()
+        self.endMoveRows()
+        self.moveFinished.emit(source_item)
         return True   
-
-    # def removeRows(self, row, count, parent=QModelIndex()):
-    #     pass
-
-    # def removeRow(self, row, parent=QModelIndex()):
-    #     pass
-
-    # def removeColumns(self, column, count, parent=QModelIndex()):
-    #     pass
-
-    # def removeColumn(self, column, parent=QModelIndex()):
-    #     pass
 
 class WaveformActiveChannelView(QtWidgets.QTreeView):
     update_active_channels_signal = QtCore.pyqtSignal(list)
@@ -446,9 +442,7 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
         self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
         self.model = WaveformActiveChannelModel()
         self.setModel(self.model)
-
-        # invis_root = self.invisibleRootItem()
-        # invis_root.setFlags(invis_root.flags() | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled)
+        self.model.moveFinished.emit(self.setSelectionAfterMove)
         
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
         add_channel = QtWidgets.QAction("Add channel", self)
@@ -459,6 +453,9 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
 
         self.add_channel_dialog = AddChannelDialog(self)
         self.add_channel_dialog.add_channel_signal.connect(self.add_active_channel)
+
+    def setSelectionAfterMove(self, index):
+        self.selectionModel().select(index, QtCore.QItemSelectionModel.ClearAndSelect)
 
     def add_channel_widget(self):
         self.add_channel_dialog.open()
@@ -479,31 +476,6 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
 
     def update_active_channels(self):
         self.update_active_channels_signal.emit(self.active_channels)
-
-    # Override
-    # def dropEvent(self, event):
-    #     print(event)
-    #     if event.mimeData().hasFormat("text/plain"):
-    #         passedData = event.mimeData().text()
-    #         event.acceptProposedAction()
-    # 
-    # # Override
-    # def startDrag(self, allowableActions):
-    #     drag = QtGui.QDrag(self)
-    #     selected_indexes = self.selectionModel().selectedIndexes()
-    #     if len(selected_indexes) < 1:
-    #         return
-    #     start_row = selected_indexes[0]
-    #     mimedata = QtCore.QMimeData(start_row)
-    #     drag.setMimeData(mimedata)
-    #     drag.exec_(allowableActions)
-
-    # Override
-    # def mimeTypes(self):
-    #    mimetypes = QtGui.QTreeWidget.mimeTypes(self)
-    #    mimetypes.append("text/plain")
-    #    return mimetypes
-
 
 
 class WaveformDock(QtWidgets.QDockWidget):
