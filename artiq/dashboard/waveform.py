@@ -12,6 +12,287 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+# Modified from https://github.com/futal/simpletreemodel/blob/master/simpletreemodel.py
+class TreeItem:
+    id_obj = itertools.count(1)
+
+    def __init__(self, data, parent=None):
+        self.id = next(TreeItem.id_obj)
+        self._item_data = data
+        self._parent_item = parent
+        self._child_items = []
+
+    def appendChild(self, item):
+        item._parent_item = self
+        self._child_items.append(item)
+
+    def child(self, row):
+        return self._child_items[row]
+
+    def children(self):
+        return self._child_items
+
+    def childCount(self):
+        return len(self._child_items)
+
+    def columnCount(self):
+        return len(self._item_data)
+
+    def data(self):
+        if not self._item_data:
+            return QtCore.QVariant()
+        return QtCore.QVariant(self._item_data)
+
+    def setData(self, value):
+        self._item_data = value
+
+    def parent(self):
+        return self._parent_item
+
+    def row(self):
+        if self._parent_item:
+            return self._parent_item._child_items.index(self)
+        return 0
+
+    def insertChild(self, row, item):
+        self._child_items.insert(row, item)
+
+    def pop(self, row):
+        return self._child_items.pop(row)
+
+    def __eq__(self, other):
+        if other is None:
+            return False
+        return self.id == other.id
+
+class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
+    moveFinished = QtCore.pyqtSignal(QtCore.QModelIndex)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.active_channels = {} 
+        self._root_item = TreeItem('Channel')
+        self.beginInsertRows(QtCore.QModelIndex(), 0, 3)
+        item1 = TreeItem('1')
+        item2 = TreeItem('2')
+        item3 = TreeItem('3')
+        item4 = TreeItem('4')
+        self._root_item.appendChild(item1)
+        self._root_item.appendChild(item2)
+        self._root_item.appendChild(item3)
+        self._root_item.appendChild(item4)
+        self.endInsertRows()
+
+    def flags(self, index):
+        defaultFlags = QtCore.QAbstractItemModel.flags(self, index)
+        if not index.isValid():
+            return defaultFlags
+        return QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsDropEnabled | QtCore.Qt.ItemIsEditable | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled | defaultFlags
+
+    def data(self, index, role):
+        if not index.isValid():
+            return QtCore.QVariant()
+        item = index.internalPointer()  
+        if role == Qt.DisplayRole:
+            return QtCore.QVariant(item.data())
+
+    def index(self, row, column, parent=QtCore.QModelIndex()):
+        if not self.hasIndex(row, column, parent):
+            return QtCore.QModelIndex()
+        if not parent.isValid():
+            parent_item = self._root_item
+        else:
+            parent_item = parent.internalPointer()
+        child_item = parent_item.child(row)
+        if child_item:
+            return self.createIndex(row, column, child_item)
+        else:
+            return QtCore.QModelIndex()
+
+    def parent(self, index):
+       if not index.isValid():
+          return QtCore.QModelIndex()
+       child_item = index.internalPointer()
+       if not child_item:
+          return QtCore.QModelIndex()
+       parent_item = child_item.parent()
+       if parent_item == self._root_item:
+          return QtCore.QModelIndex()
+       if not parent_item:
+           return QtCore.QModelIndex()
+       return self.createIndex(parent_item.row(), 0, parent_item)
+
+    def headerData(self, section, orientation, role):
+        return ["Channels"]
+
+    def rowCount(self, parent=QtCore.QModelIndex()):
+        if parent.isValid():
+            return parent.internalPointer().childCount()
+        return self._root_item.childCount()
+
+    def columnCount(self, parent=QtCore.QModelIndex()):
+        return 1
+
+    def supportedDragActions(self):
+        return Qt.MoveAction
+
+    def supportedDropActions(self):
+        return Qt.MoveAction
+
+    def addChannel(self, channel):
+        row = self.rowCount()
+        self.beginInsertRows(QtCore.QModelIndex(), row, row)
+        self._root_item.appendChild(TreeItem(channel))
+        self.endInsertRows()
+
+    def setData(self, index, value, role):
+        if not index.isValid():
+            return
+        item = index.internalPointer()  
+        item.setData(value)
+        return True
+
+    def setItemData(self, index, roles):
+        if not index.isValid():
+            return
+        item = index.internalPointer()
+        if Qt.DisplayRole in roles.keys():
+            item.setData(roles[Qt.DisplayRole])
+    
+    def mimeTypes(self):
+        return ['application/x-qabstractitemmodeldatalist']
+
+    def mimeData(self, indexes):
+        mimedata = QtCore.QMimeData()
+        encoded_data = QtCore.QByteArray()
+        stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.WriteOnly)
+        for index in indexes:
+            if index.isValid():
+                item = index.internalPointer()
+                stream.writeInt32(item.id)
+        mimedata.setData('application/x-qabstractitemmodeldatalist', encoded_data)
+        return mimedata
+
+    def dropMimeData(self, mimedata, action, row, column, parent):
+        if action == Qt.IgnoreAction:
+            return True
+        if not mimedata.hasFormat('application/x-qabstractitemmodeldatalist'):
+            return False
+        if column > 0:
+            return False
+        if not parent.isValid():
+            return False
+        dest_item = parent.internalPointer()
+        parent_item = dest_item.parent()
+        encoded_data = mimedata.data('application/x-qabstractitemmodeldatalist')
+        stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.ReadOnly)
+        source_id = stream.readInt32() 
+        source_item = None
+        for item in parent_item.children():
+            if item.id == source_id:
+                source_item = item
+                break
+        if source_item is None:
+            return False
+
+        if source_item == dest_item:
+            return False
+        
+        source_row = int(source_item.row())
+        dest_row = int(dest_item.row())
+        target_row = dest_row
+        if dest_row > source_row:
+            target_row += 1
+        else:
+            source_row += 1
+        self.beginMoveRows(parent.parent(), target_row, target_row, parent.parent(), source_row)
+        parent_item.insertChild(target_row, source_item)
+        parent_item.pop(source_row) 
+        self.endMoveRows()
+        self.moveFinished.emit(source_item)
+        return True   
+
+class WaveformActiveChannelView(QtWidgets.QTreeView):
+    update_active_channels_signal = QtCore.pyqtSignal(list)
+
+    def __init__(self):
+        QtWidgets.QTreeView.__init__(self)
+        self.active_channels = []
+        self.channels = ["main_channel"]
+        self.channel_size_map = {"main_channel": 8}
+        self.setMaximumWidth(150)
+        self.setIndentation(5)
+        self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self.setDragEnabled(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
+        self.model = WaveformActiveChannelModel()
+        self.setModel(self.model)
+        self.model.moveFinished.emit(self.setSelectionAfterMove)
+        
+        self.setContextMenuPolicy(Qt.ActionsContextMenu)
+        add_channel = QtWidgets.QAction("Add channel", self)
+        add_channel.triggered.connect(self.add_channel_widget)
+        add_channel.setShortcut("CTRL+N")
+        add_channel.setShortcutContext(Qt.WidgetShortcut)
+        self.addAction(add_channel)
+
+        self.add_channel_dialog = AddChannelDialog(self)
+        self.add_channel_dialog.add_channel_signal.connect(self.add_active_channel)
+
+    def setSelectionAfterMove(self, index):
+        self.selectionModel().select(index, QtCore.QItemSelectionModel.ClearAndSelect)
+
+    def add_channel_widget(self):
+        self.add_channel_dialog.open()
+
+    def add_active_channel(self, name):
+        self.model.addChannel(name)
+
+    def update_active_channels(self):
+        self.update_active_channels_signal.emit(self.active_channels)
+
+
+
+class WaveformChannelList(QtWidgets.QListWidget):
+    add_channel_signal = QtCore.pyqtSignal(str)
+
+    def __init__(self):
+        QtWidgets.QListWidget.__init__(self)
+
+        self.channels = ["main_channel"]
+        for channel in self.channels:
+            self.addItem(channel)
+
+        self.itemDoubleClicked.connect(self.emit_add_channel)
+
+    def emit_add_channel(self, item):
+        s = item.text()
+        self.add_channel_signal.emit(s)
+
+
+class AddChannelDialog(QtWidgets.QDialog):
+    add_channel_signal = QtCore.pyqtSignal(str)
+
+    def __init__(self, parent):
+        QtWidgets.QDialog.__init__(self, parent=parent)
+        self.setWindowTitle("Add channel")   
+
+        self.channels = parent.channels
+        grid = QtWidgets.QGridLayout()
+        grid.setRowMinimumHeight(1, 40)
+        grid.setColumnMinimumWidth(2, 60)
+        self.setLayout(grid)
+        self.waveform_channel_list = WaveformChannelList()
+        grid.addWidget(self.waveform_channel_list, 0, 0)
+        self.waveform_channel_list.add_channel_signal.connect(self.add_channel)
+
+    def add_channel(self, name):
+        self.add_channel_signal.emit(name) 
+        self.close()
+
+
 class WaveformScene(QtWidgets.QGraphicsScene):
     def __init__(self, parent=None):
         QtWidgets.QGraphicsScene.__init__(self, parent)
@@ -161,322 +442,6 @@ class WaveformScene(QtWidgets.QGraphicsScene):
             self.timescale = self.timescale // 5
             self.x_offset = self.x_offset * 5
         self.refresh_display()
-
-class WaveformChannelList(QtWidgets.QListWidget):
-    add_channel_signal = QtCore.pyqtSignal(str)
-
-    def __init__(self):
-        QtWidgets.QListWidget.__init__(self)
-
-        self.channels = ["main_channel"]
-        for channel in self.channels:
-            self.addItem(channel)
-
-        self.itemDoubleClicked.connect(self.emit_add_channel)
-
-    def emit_add_channel(self, item):
-        s = item.text()
-        self.add_channel_signal.emit(s)
-
-
-class AddChannelDialog(QtWidgets.QDialog):
-    add_channel_signal = QtCore.pyqtSignal(str)
-
-    def __init__(self, parent):
-        QtWidgets.QDialog.__init__(self, parent=parent)
-        self.setWindowTitle("Add channel")   
-
-        self.channels = parent.channels
-        grid = QtWidgets.QGridLayout()
-        grid.setRowMinimumHeight(1, 40)
-        grid.setColumnMinimumWidth(2, 60)
-        self.setLayout(grid)
-        self.waveform_channel_list = WaveformChannelList()
-        grid.addWidget(self.waveform_channel_list, 0, 0)
-        self.waveform_channel_list.add_channel_signal.connect(self.add_channel)
-
-    def add_channel(self, name):
-        self.add_channel_signal.emit(name) 
-        self.close()
-
-# Modified from https://github.com/futal/simpletreemodel/blob/master/simpletreemodel.py
-class TreeItem:
-    id_obj = itertools.count(1)
-
-    def __init__(self, data, parent=None):
-        self.id = next(TreeItem.id_obj)
-        self._item_data = data
-        self._parent_item = parent
-        self._child_items = []
-
-    def appendChild(self, item):
-        item._parent_item = self
-        self._child_items.append(item)
-
-    def child(self, row):
-        return self._child_items[row]
-
-    def children(self):
-        return self._child_items
-
-    def childCount(self):
-        return len(self._child_items)
-
-    def columnCount(self):
-        return len(self._item_data)
-
-    def data(self):
-        if not self._item_data:
-            return QtCore.QVariant()
-        return QtCore.QVariant(self._item_data)
-
-    def setData(self, value):
-        self._item_data = value
-
-    def parent(self):
-        return self._parent_item
-
-    def row(self):
-        if self._parent_item:
-            return self._parent_item._child_items.index(self)
-        return 0
-
-    def insertChild(self, row, item):
-        self._child_items.insert(row, item)
-
-    def pop(self, row):
-        return self._child_items.pop(row)
-
-    def __eq__(self, other):
-        if other is None:
-            return False
-        return self.id == other.id
-
-class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
-    moveFinished = QtCore.pyqtSignal(QtCore.QModelIndex)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.active_channels = {} 
-        self._root_item = TreeItem('Channel')
-        self.beginInsertRows(QtCore.QModelIndex(), 0, 3)
-        item1 = TreeItem('1')
-        item2 = TreeItem('2')
-        item3 = TreeItem('3')
-        item4 = TreeItem('4')
-        self._root_item.appendChild(item1)
-        self._root_item.appendChild(item2)
-        self._root_item.appendChild(item3)
-        self._root_item.appendChild(item4)
-        self.endInsertRows()
-
-    def flags(self, index):
-        defaultFlags = QtCore.QAbstractItemModel.flags(self, index)
-        if not index.isValid():
-            return defaultFlags
-        return QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsDragEnabled | QtCore.Qt.ItemIsDropEnabled | QtCore.Qt.ItemIsEditable | QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsEnabled | defaultFlags
-
-    def data(self, index, role):
-        if not index.isValid():
-            return QtCore.QVariant()
-        item = index.internalPointer()  
-        if role == Qt.DisplayRole:
-            return QtCore.QVariant(item.data())
-
-    def index(self, row, column, parent=QtCore.QModelIndex()):
-        if not self.hasIndex(row, column, parent):
-            return QtCore.QModelIndex()
-        if not parent.isValid():
-            parent_item = self._root_item
-        else:
-            parent_item = parent.internalPointer()
-        child_item = parent_item.child(row)
-        if child_item:
-            return self.createIndex(row, column, child_item)
-        else:
-            return QtCore.QModelIndex()
-
-    def parent(self, index):
-       if not index.isValid():
-          return QtCore.QModelIndex()
-       child_item = index.internalPointer()
-       if not child_item:
-          return QtCore.QModelIndex()
-       parent_item = child_item.parent()
-       if parent_item == self._root_item:
-          return QtCore.QModelIndex()
-       if not parent_item:
-           return QtCore.QModelIndex()
-       return self.createIndex(parent_item.row(), 0, parent_item)
-
-    def headerData(self, section, orientation, role):
-        return ["Channels"]
-
-    def rowCount(self, parent=QtCore.QModelIndex()):
-        if parent.isValid():
-            return parent.internalPointer().childCount()
-        return self._root_item.childCount()
-
-    def columnCount(self, parent=QtCore.QModelIndex()):
-        return 1
-
-    def supportedDragActions(self):
-        return Qt.MoveAction
-
-    def supportedDropActions(self):
-        return Qt.MoveAction
-
-    def addChannel(self, channel):
-        row = self.rowCount()
-        self.beginInsertRows(QtCore.QModelIndex(), row, row)
-        self._root_item.appendChild(TreeItem(channel))
-        self.endInsertRows()
-
-    # def insertRows(self, row, count, index):
-    #     if count != 1:
-    #         return False
-    #     if not index.parent().isValid():
-    #         return False
-    #     parent_item = index.parent().internalPointer()
-    #     self.beginInsertRows(QtCore.QModelIndex(), row, row)
-    #     parent_item.insertChild(row, TreeItem(''))
-    #     self.endInsertRows()
-    #     return True
-
-    # def removeRows(self, row, count, index):
-    #     if count != 1:
-    #         return False
-    #     if not index.parent().isValid():
-    #         return False
-    #     parent_item = index.parent().internalPointer()
-    #     self.beginRemoveRows(QtCore.QModelIndex(), row, row)
-    #     parent_item.pop(row)
-    #     self.endRemoveRows()
-    #     return True
-
-    def setData(self, index, value, role):
-        if not index.isValid():
-            return
-        item = index.internalPointer()  
-        item.setData(value)
-        return True
-
-    def setItemData(self, index, roles):
-        if not index.isValid():
-            return
-        item = index.internalPointer()
-        if Qt.DisplayRole in roles.keys():
-            item.setData(roles[Qt.DisplayRole])
-    
-    def mimeTypes(self):
-        return ['application/x-qabstractitemmodeldatalist']
-
-    def mimeData(self, indexes):
-        mimedata = QtCore.QMimeData()
-        encoded_data = QtCore.QByteArray()
-        stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.WriteOnly)
-        for index in indexes:
-            if index.isValid():
-                item = index.internalPointer()
-                stream.writeInt32(item.id)
-        mimedata.setData('application/x-qabstractitemmodeldatalist', encoded_data)
-        return mimedata
-
-    def dropMimeData(self, mimedata, action, row, column, parent):
-        if action == Qt.IgnoreAction:
-            return True
-        if not mimedata.hasFormat('application/x-qabstractitemmodeldatalist'):
-            return False
-        if column > 0:
-            return False
-        if not parent.isValid():
-            return False
-        dest_item = parent.internalPointer()
-        print("dest_item id", dest_item.id)
-        parent_item = dest_item.parent()
-        print("parent_item id", parent_item.id)
-        encoded_data = mimedata.data('application/x-qabstractitemmodeldatalist')
-        stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.ReadOnly)
-        source_id = stream.readInt32() 
-        source_item = None
-        for item in parent_item.children():
-            if item.id == source_id:
-                source_item = item
-                break
-        if source_item is None:
-            return False
-
-        print("source_item id", source_item.id)
-
-        if source_item == dest_item:
-            print("same node")
-            return False
-        
-        source_row = int(source_item.row())
-        dest_row = int(dest_item.row())
-        target_row = dest_row
-        if dest_row > source_row:
-            target_row += 1
-        else:
-            source_row += 1
-        self.beginMoveRows(parent.parent(), target_row, target_row, parent.parent(), source_row)
-        parent_item.insertChild(target_row, source_item)
-        parent_item.pop(source_row) 
-        self.endMoveRows()
-        self.moveFinished.emit(source_item)
-        return True   
-
-class WaveformActiveChannelView(QtWidgets.QTreeView):
-    update_active_channels_signal = QtCore.pyqtSignal(list)
-
-    def __init__(self):
-        QtWidgets.QTreeView.__init__(self)
-        self.active_channels = []
-        self.channels = ["main_channel"]
-        self.channel_size_map = {"main_channel": 8}
-        self.setMaximumWidth(150)
-        self.setIndentation(5)
-        self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
-        self.setDragEnabled(True)
-        self.setDropIndicatorShown(True)
-        self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
-        self.model = WaveformActiveChannelModel()
-        self.setModel(self.model)
-        self.model.moveFinished.emit(self.setSelectionAfterMove)
-        
-        self.setContextMenuPolicy(Qt.ActionsContextMenu)
-        add_channel = QtWidgets.QAction("Add channel", self)
-        add_channel.triggered.connect(self.add_channel_widget)
-        add_channel.setShortcut("CTRL+N")
-        add_channel.setShortcutContext(Qt.WidgetShortcut)
-        self.addAction(add_channel)
-
-        self.add_channel_dialog = AddChannelDialog(self)
-        self.add_channel_dialog.add_channel_signal.connect(self.add_active_channel)
-
-    def setSelectionAfterMove(self, index):
-        self.selectionModel().select(index, QtCore.QItemSelectionModel.ClearAndSelect)
-
-    def add_channel_widget(self):
-        self.add_channel_dialog.open()
-
-    def add_active_channel(self, name):
-        self.model.addChannel(name)
-        # item = QtWidgets.QTreeWidgetItem([name])
-        # channel_size = self.channel_size_map[name]
-        # if channel_size > 1:
-        #     self.active_channels.append([name] + list(range(channel_size)))
-        # else:
-        #     self.active_channels.append([name])
-        # for sbc in self.active_channels[-1][1:]:
-        #     child = QtWidgets.QTreeWidgetItem([name + "[" + str(sbc) + "]"])
-        #     item.addChild(child)
-        # self.addTopLevelItem(item)
-        # self.update_active_channels()
-
-    def update_active_channels(self):
-        self.update_active_channels_signal.emit(self.active_channels)
-
 
 class WaveformDock(QtWidgets.QDockWidget):
     def __init__(self):
