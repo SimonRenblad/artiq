@@ -148,22 +148,20 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
     def supportedDropActions(self):
         return Qt.MoveAction
 
-    # TODO change to use channel manager
     def addChannel(self, channel, size):
         self.layoutAboutToBeChanged.emit()
-        row = self.rowCount(self.headerIndex())
-        item = TreeItem(channel)
-        self.beginInsertRows(self.headerIndex(), row, row)
-        self._header_item.appendChild(item)
+        row = self.rowCount(self.rootIndex())
+        item = Channel(channel, size)
+        self.beginInsertRows(self.rootIndex(), row, row)
+        self.active_channels.append(item)
         self.endInsertRows()
-        self.beginInsertRows(self.itemIndex(item), 0, size - 1)
+        self.beginInsertRows(self.index(row, 0), 0, size - 1)
         if size > 1:
-            for i in range(size):
-                sub_item = TreeItem(f"{channel}[{i}]", num=i)
-                item.appendChild(sub_item)
+            self.active_channels[row].resetBits()
         self.endInsertRows()
-        self.updateActiveChannels()
         self.layoutChanged.emit()
+        self.channel_mgr.active_channels = self.active_channels
+        self.channel_mgr.activeChannelsChanged.emit(self.active_channels)
 
     # TODO possibly remove
     def setData(self, index, value, role):
@@ -184,7 +182,6 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
     def mimeTypes(self):
         return ['application/x-qabstractitemmodeldatalist']
 
-    # TODO change drag and drop behavior
     def mimeData(self, indexes):
         mimedata = QtCore.QMimeData()
         encoded_data = QtCore.QByteArray()
@@ -192,7 +189,16 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         for index in indexes:
             if index.isValid():
                 item = index.internalPointer()
-                stream.writeInt32(item.id)
+                id = None
+                pos = None
+                if isinstance(item, Bit):
+                    id = item.channel().id
+                    pos = item.pos()
+                elif isinstance(item, Channel):
+                    id = item.id
+                    pos = -1
+                stream.writeInt32(id)
+                stream.writeInt32(pos)
         mimedata.setData('application/x-qabstractitemmodeldatalist', encoded_data)
         return mimedata
 
@@ -205,35 +211,43 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
             return False
         if not parent.isValid():
             return False
-        dest_item = parent.internalPointer()
-        parent_item = dest_item.parent()
         encoded_data = mimedata.data('application/x-qabstractitemmodeldatalist')
         stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.ReadOnly)
         source_id = stream.readInt32() 
-        source_item = None
-        for item in parent_item.children():
-            if item.id == source_id:
-                source_item = item
-                break
-        if source_item is None:
-            return False
+        source_pos = stream.readInt32()
+        source_item = self.channel_mgr.get_channel_from_id(source_id)
+        dest_item = parent.internalPointer()
 
-        if source_item == dest_item:
-            return False
-        
-        source_row = int(source_item.row())
-        dest_row = int(dest_item.row())
-        target_row = dest_row
-        if dest_row > source_row:
-            target_row += 1
+        # if pos is -1, full channel move
+        # TODO, move correct rows
+        if source_pos < 0:
+            parent_index = self.rootIndex()
+            if dest_item.id == source_id:
+                return False
+
+            source_row = self.channel_mgr.get_row_from_id(source_id)
+            dest_row = row
+            if source_row < dest_row:
+                dest_row += 1
+            self.beginMoveRows(parent_index, source_row, source_row, parent_index, dest_row)
+            self.active_channels.insert(dest_row, source_item)
+            self.active_channels.pop(source_row)
+            self.endMoveRows()
         else:
-            source_row += 1
-        self.beginMoveRows(parent.parent(), target_row, target_row, parent.parent(), source_row)
-        parent_item.insertChild(target_row, source_item)
-        parent_item.pop(source_row) 
-        self.endMoveRows()
-        self.moveFinished.emit(self.index(dest_row, 0, parent.parent()))
-        self.updateActiveChannels()
+            if dest_item.id != source_id:
+                return False
+            parent_index = parent.parent()
+            source_row = source_item.get_row_from_pos(source_pos)
+            dest_row = row
+            if source_row < dest_row:
+                dest_row += 1
+            self.beginMoveRows(parent_index, source_row, source_row, parent_index, dest_row)
+            dest_item.bits.insert(dest_row, Bit(source_pos, dest_item))
+            dest_item.bits.pop(source_row) 
+            self.endMoveRows()
+
+        self.channel_mgr.active_channels = self.active_channels
+        self.channel_mgr.activeChannelsChanged.emit(self.active_channels)
         return True   
 
 class WaveformActiveChannelView(QtWidgets.QTreeView):
@@ -435,8 +449,8 @@ class WaveformScene(QtWidgets.QGraphicsScene):
                     self.addLine(*self._transform_pos(new_t, current_value, new_t, min(new_value, 1), row), pen)
                 if not channel.is_collapsed:
                     for i, c in enumerate(channel.bits):
-                        curr_bit = (current_value >> c) & 1
-                        new_bit = (new_value >> c) & 1
+                        curr_bit = (current_value >> c.pos()) & 1
+                        new_bit = (new_value >> c.pos()) & 1
                         self.addLine(*self._transform_pos(current_t, curr_bit, new_t, curr_bit, row + i + 1), sub_pen)
                         if new_bit != curr_bit:
                             self.addLine(*self._transform_pos(new_t, 0, new_t, 1, row + i + 1), sub_pen)
@@ -489,7 +503,14 @@ class Channel:
         self.id = next(Channel.channel_id) 
         self.is_collapsed = False
         self.is_active = True
-        self.bits = list(range(size))
+
+    def get_row_from_pos(self, pos):
+        for i, bit in enumerate(self.bits):
+            if bit.pos() == pos:
+                return i
+    
+    def resetBits(self):
+        self.bits = [Bit(i, self) for i in range(size)]
 
     def collapse(self):
         self.is_collapsed = True
@@ -551,6 +572,11 @@ class ChannelManager():
             if channel.id == id:
                 return channel
 
+    def get_row_from_id(self, id):
+        for i, c in enumerate(self.active_channels):
+            if c.id == id:
+                return i
+                
     def get_id_from_row(self, row):
         return self.active_channels[row]
 
