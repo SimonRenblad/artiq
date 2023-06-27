@@ -82,7 +82,6 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         self._root_item = "Channels"
 
     def rootIndex(self):
-        print("root index called")
         return self.createIndex(0, 0, self._root_item)
 
     def flags(self, index):
@@ -92,7 +91,6 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         return Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsSelectable | Qt.ItemIsEnabled | defaultFlags
 
     def data(self, index, role):
-        print("data called")
         if not index.isValid():
             return self._root_item
         item = index.internalPointer()  
@@ -105,9 +103,7 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
             else:
                 return item
 
-
     def index(self, row, column, parent=QtCore.QModelIndex()):
-        print("index called")
         if not self.hasIndex(row, column, parent):
             return self.rootIndex()
         if not parent.isValid():
@@ -121,7 +117,6 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
             return self.rootIndex()
 
     def parent(self, index):
-        print("parent called")
         if not index.isValid():
             return self.rootIndex()
         item = index.internalPointer()
@@ -138,7 +133,6 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         return ["Channels"]
 
     def rowCount(self, index=QtCore.QModelIndex()):
-        print("rowCount called")
         if not index.isValid():
             return len(self.active_channels)
         item = index.internalPointer()
@@ -177,13 +171,16 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
                 item = index.internalPointer()
                 id = None
                 pos = None
+                row = index.row()
                 if isinstance(item, Bit):
                     id = item.channel().id
                     pos = item.pos()
+                    row = self.channel_mgr.get_row_from_id(id)
                 elif isinstance(item, Channel):
                     id = item.id
                     pos = -1
                 stream.writeInt32(id)
+                stream.writeInt32(row)
                 stream.writeInt32(pos)
         mimedata.setData('application/x-qabstractitemmodeldatalist', encoded_data)
         return mimedata
@@ -200,52 +197,34 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         encoded_data = mimedata.data('application/x-qabstractitemmodeldatalist')
         stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.ReadOnly)
         source_id = stream.readInt32() 
+        print("source_id", source_id)
+        source_row = stream.readInt32()
+        print("source_row", source_row)
         source_pos = stream.readInt32()
-        source_item = self.channel_mgr.get_channel_from_id(source_id)
+        print("source_pos", source_pos)
         dest_item = parent.internalPointer()
 
         # if pos is -1, full channel move
-        # TODO, move correct rows
         if source_pos < 0:
-            parent_index = self.rootIndex()
+            if isinstance(dest_item, str):
+                self.channel_mgr.move_channel(row, source_row)
             if dest_item.id == source_id:
                 return False
-
-            source_row = self.channel_mgr.get_row_from_id(source_id)
-            dest_row = row
-            if source_row < dest_row:
-                dest_row += 1
-            self.beginMoveRows(parent_index, source_row, source_row, parent_index, dest_row)
-            self.active_channels.insert(dest_row, source_item)
-            self.active_channels.pop(source_row)
-            self.endMoveRows()
+            self.channel_mgr.move_channel(parent.row(), source_row)
         else:
-            if dest_item.id != source_id:
+            if isinstance(dest_item, Channel):
+                self.channel_mgr.move_bit(row, source_pos, source_row)
+            if dest_item.channel().id != source_id:
                 return False
-            parent_index = parent.parent()
-            source_row = source_item.get_row_from_pos(source_pos)
-            dest_row = row
-            if source_row < dest_row:
-                dest_row += 1
-            self.beginMoveRows(parent_index, source_row, source_row, parent_index, dest_row)
-            dest_item.bits.insert(dest_row, Bit(source_pos, dest_item))
-            dest_item.bits.pop(source_row) 
-            self.endMoveRows()
-
-        self.channel_mgr.active_channels = self.active_channels
-        self.channel_mgr.broadcast()
+            self.channel_mgr.move_bit(parent.row(), source_pos, source_row)
         return True   
 
 class WaveformActiveChannelView(QtWidgets.QTreeView):
 
     def __init__(self, channel_mgr):
         QtWidgets.QTreeView.__init__(self)
-
         self.channel_mgr = channel_mgr
-        self.channel_mgr.activeChannelsChanged.connect(self.update_active_channels)
-        
         self.active_channels = []
-        
         self.setMaximumWidth(150)
         self.setIndentation(5)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
@@ -254,15 +233,16 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
         self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
         self.model = WaveformActiveChannelModel(channel_mgr=self.channel_mgr)
         self.setModel(self.model)
-        
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
         add_channel = QtWidgets.QAction("Add channel", self)
         add_channel.triggered.connect(self.add_channel_widget)
         add_channel.setShortcut("CTRL+N")
         add_channel.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel)
-
         self.add_channel_dialog = AddChannelDialog(self, channel_mgr=self.channel_mgr)
+        self.channel_mgr.activeChannelsChanged.connect(self.update_active_channels)
+        self.collapsed.connect(self.channel_mgr.collapse_channel)
+        self.expanded.connect(self.channel_mgr.expand_channel)
 
     def setSelectionAfterMove(self, index):
         self.selectionModel().select(index, QtCore.QItemSelectionModel.ClearAndSelect)
@@ -272,23 +252,21 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
 
     def update_active_channels(self):
         self.active_channels = self.channel_mgr.active_channels
+        self.setExpanded(self.model.rootIndex(), True)
+        for id in self.channel_mgr.expanded_channels:
+            row = self.channel_mgr.get_row_from_id(id)
+            index = self.model.index(row, 0, self.model.rootIndex())
+            self.setExpanded(index, True)
 
-    def collapsed(index):
-        pass        
-
-    def expanded(index):
-        pass
 
 class WaveformChannelList(QtWidgets.QListWidget):
     add_channel_signal = QtCore.pyqtSignal()
 
     def __init__(self, channel_mgr=None):
         QtWidgets.QListWidget.__init__(self)
-
         self.channel_mgr = channel_mgr
         for channel in self.channel_mgr.channels:
             self.addItem(channel)
-
         self.itemDoubleClicked.connect(self.emit_add_channel)
 
     def emit_add_channel(self, item):
@@ -302,7 +280,6 @@ class AddChannelDialog(QtWidgets.QDialog):
     def __init__(self, parent, channel_mgr=None):
         QtWidgets.QDialog.__init__(self, parent=parent)
         self.setWindowTitle("Add channel")   
-
         self.channel_mgr = channel_mgr
         grid = QtWidgets.QGridLayout()
         grid.setRowMinimumHeight(1, 40)
@@ -319,29 +296,20 @@ class AddChannelDialog(QtWidgets.QDialog):
 class WaveformScene(QtWidgets.QGraphicsScene):
     def __init__(self, parent=None, channel_mgr=None):
         QtWidgets.QGraphicsScene.__init__(self, parent)
-
         self.channel_mgr = channel_mgr
-
         self.channel_mgr.activeChannelsChanged.connect(self.update_channels)
-
+        self.channel_mgr.expandedChannelsChanged.connect(self.update_channels)
         self.width, self.height = 100, 100
-
         self.setSceneRect(0, 0, 100, 100)
         self.setBackgroundBrush(Qt.black)
-        
         self.channels = channel_mgr.active_channels
-
         self.x_scale, self.y_scale, self.row_scale = 100, 20, 1.1
         self.x_offset, self.y_offset = 0, 30
-
         self.timescale_unit = "ps"
         self.timescale = 1
-
         self.start_time = 0
         self.end_time = 0
-
         self.refresh_display()
-
         self.left_mouse_pressed = False
 
     def display_scale(self):
@@ -349,21 +317,14 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         pen.setStyle(Qt.SolidLine)
         pen.setWidth(1)
         pen.setBrush(Qt.blue)
-
         font = QtGui.QFont("Monospace", pointSize=7)
-
         top_band_height = 16
-
         small_tick_height = 8
-
         vert_line_extra_length = 500
-
         num_small_tick = 10 # should be factor of x_scale
         x_start = self._transform_x(self.start_time)
         x_end = self._transform_x(self.end_time)
-
         self.addLine(x_start, top_band_height, x_end, top_band_height, pen)
-        
         t = self.start_time
         while t < self.end_time:
             self.addLine(self._transform_x(t), 0, self._transform_x(t), len(self.channels)*self.row_scale*self.y_scale + vert_line_extra_length, pen)
@@ -400,12 +361,10 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         pen.setStyle(Qt.SolidLine)
         pen.setWidth(1)
         pen.setBrush(Qt.green)
-
         sub_pen = QtGui.QPen()
         sub_pen.setStyle(Qt.SolidLine)
         sub_pen.setWidth(1)
         sub_pen.setBrush(Qt.darkGreen)
-       
         messages = self.channel_mgr.data[channel.name]
         current_value = messages[0][0]
         current_t = messages[0][1]
@@ -420,7 +379,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
                 else:
                     self.addLine(*self._transform_pos(current_t, current_value, new_t, current_value, row), pen)
                     self.addLine(*self._transform_pos(new_t, current_value, new_t, min(new_value, 1), row), pen)
-                if not channel.is_collapsed:
+                if channel.id in self.channel_mgr.expanded_channels:
                     for i, c in enumerate(channel.bits):
                         curr_bit = (current_value >> c.pos()) & 1
                         new_bit = (new_value >> c.pos()) & 1
@@ -465,6 +424,9 @@ class Bit:
     def channel(self):
         return self.parent
 
+    def __repr__(self):
+        return str(self.pos())
+
 
 class Channel:
     channel_id = itertools.count(1)
@@ -474,8 +436,6 @@ class Channel:
         self.display_name = name if size == 1 else f"{name}[{size}]"
         self.size = size
         self.id = next(Channel.channel_id) 
-        self.is_collapsed = False
-        self.is_active = True
         self.bits = []
 
     def get_row_from_pos(self, pos):
@@ -486,17 +446,15 @@ class Channel:
     def resetBits(self):
         self.bits = [Bit(i, self) for i in range(self.size)]
 
-    def collapse(self):
-        self.is_collapsed = True
-
-    def expand(self):
-        self.is_collapsed = False
-
     def display_bit(self, bit):
         return f"{self.name}[{bit.pos()}]"
 
+    def __repr__(self):
+        return self.display_name + ": " + str(self.bits)
+
 class ChannelManager(QtCore.QObject):
     activeChannelsChanged = QtCore.pyqtSignal()
+    expandedChannelsChanged = QtCore.pyqtSignal()
 
     def __init__(self):
         QtCore.QObject.__init__(self) 
@@ -510,6 +468,57 @@ class ChannelManager(QtCore.QObject):
         }
         self.active_channels = []
         self.channels = ["main_channel", "side_channel"]
+        self.expanded_channels = set()
+
+    def expand_channel(self, index):
+        if not index.isValid():
+            return
+        item = index.internalPointer()
+        if not isinstance(item, Channel):
+            return
+        id = index.internalPointer().id
+        self.expanded_channels.add(id)
+        self._expanded_emit()
+
+    def collapse_channel(self, index):
+        if not index.isValid():
+            return
+        item = index.internalPointer()
+        if not isinstance(item, Channel):
+            return
+        id = index.internalPointer().id
+        self.expanded_channels.remove(id)
+        self._expanded_emit()
+
+    def _expanded_emit(self):
+        self.expandedChannelsChanged.emit()
+
+    def move_channel(self, dest, source):
+        channel = self.active_channels[source]
+        if dest > source:
+            dest -= 1
+        else:
+            source += 1
+        self.active_channels.insert(dest, channel)
+        self.active_channels.pop(source)
+        self.broadcast()
+
+    def move_bit(self, dest, source, index):
+        print("dest", dest)
+        channel = self.active_channels[index]
+        print(channel)
+        bit = channel.bits[source]
+        print(bit)
+        if dest > source:
+            dest += 1
+        else:
+            source += 1
+        channel.bits.insert(dest, bit)
+        print(channel.bits)
+        channel.bits.pop(source)
+        print(channel.bits)
+        self.active_channels[index] = channel
+        self.broadcast()
 
     def broadcast(self):
         self.activeChannelsChanged.emit()
