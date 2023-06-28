@@ -1,12 +1,13 @@
 from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtCore import Qt
 
-from artiq.gui.tools import LayoutWidget
+from artiq.gui.tools import LayoutWidget, get_open_file_name
 import numpy as np
 import pyqtgraph as pg
 import collections
 import math
 import itertools
+import asyncio
 
 import logging
 
@@ -169,7 +170,6 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
         QtWidgets.QTreeView.__init__(self)
         self.channel_mgr = channel_mgr
         self.active_channels = []
-        self.setMaximumWidth(150)
         self.setIndentation(5)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setDragEnabled(True)
@@ -566,15 +566,40 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.channel_mgr = ChannelManager()
         grid = LayoutWidget()
         self.setWidget(grid)
-        self.zoom_in_button = QtWidgets.QPushButton("Zoom In")
+        self.zoom_in_button = QtWidgets.QPushButton("+")
         grid.addWidget(self.zoom_in_button, 0, 0)
-        self.zoom_out_button = QtWidgets.QPushButton("Zoom Out")
+        self.zoom_out_button = QtWidgets.QPushButton("-")
         grid.addWidget(self.zoom_out_button, 0, 1)
+        self.load_trace_button = QtWidgets.QPushButton("Load Trace")
+        grid.addWidget(self.load_trace_button, 0, 2)
+        self.save_trace_button = QtWidgets.QPushButton("Save Trace")
+        grid.addWidget(self.save_trace_button, 0, 3)
+        self.sync_button = QtWidgets.QPushButton("Sync")
+        grid.addWidget(self.sync_button, 0, 10)
         self.waveform_active_channel_view = WaveformActiveChannelView(channel_mgr=self.channel_mgr)
-        grid.addWidget(self.waveform_active_channel_view, 1, 0)
+        grid.addWidget(self.waveform_active_channel_view, 1, 0, colspan=2)
         self.waveform_scene = WaveformScene(channel_mgr=self.channel_mgr) 
         self.waveform_view = QtWidgets.QGraphicsView(self.waveform_scene)
-        grid.addWidget(self.waveform_view, 1, 1)
+        grid.addWidget(self.waveform_view, 1, 2, colspan=10)
         self.waveform_view.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.zoom_in_button.clicked.connect(self.waveform_scene.decrease_timescale)
         self.zoom_out_button.clicked.connect(self.waveform_scene.increase_timescale)
+        self.load_trace_button.clicked.connect(self._load_trace_clicked)
+
+    def _load_trace_clicked(self):
+        asyncio.ensure_future(self._load_trace_task())
+
+    async def _load_trace_task(self):
+        try:
+            filename = await get_open_file_name(
+                    self,
+                    "Load Trace",
+                    "c://",
+                    "VCD files (*.vcd);;All files (*.*)")
+        except asyncio.CancelledError:
+            return
+
+        #try:
+        #    with open(filename, "r") as f:
+        #        pass
+        print(name)
