@@ -31,31 +31,23 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
     def flags(self, index):
         flags = QtCore.QAbstractItemModel.flags(self, index)
         if index.isValid():
-            flags |= Qt.ItemIsEnabled
-        if index != self.rootIndex():
-            flags |= Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsSelectable
+            flags |= Qt.ItemIsEnabled | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsSelectable
         return flags
 
     def data(self, index, role):
-        print("data")
         if not index.isValid():
-            print("index not valid")
             return "Invalid Index"
         if role == Qt.DisplayRole:
             item = index.internalPointer()  
             if isinstance(item, Bit):
-                print("bit data")
                 channel = index.parent().internalPointer()
                 return channel.display_bit(item)
             elif isinstance(item, Channel):
-                print("channel data")
                 return item.display_name
             else:
-                print("header data")
                 return item
 
     def index(self, row, column, parent=QtCore.QModelIndex()):
-        print("index")
         if not self.hasIndex(row, column, parent):
             return QtCore.QModelIndex()
         if not parent.isValid():
@@ -82,16 +74,12 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         return ["Channels"]
 
     def rowCount(self, index=QtCore.QModelIndex()):
-        print("rowcount")
         if not index.isValid():
-            print("index invalid")
             return 1
         item = index.internalPointer()
         if isinstance(item, Bit):
-            print("is bit")
             return 0
         elif isinstance(item, Channel):
-            print("is channel")
             return len(item.bits)
         return len(self.active_channels)
 
@@ -123,18 +111,18 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
             if index.isValid():
                 item = index.internalPointer()
                 id = None
-                pos = None
+                ord = None
                 row = index.row()
                 if isinstance(item, Bit):
                     id = item.channel().id
-                    pos = item.pos()
+                    ord = item.channel().bits.index(item)
                     row = self.channel_mgr.get_row_from_id(id)
                 elif isinstance(item, Channel):
                     id = item.id
-                    pos = -1
+                    ord = -1
                 stream.writeInt32(id)
                 stream.writeInt32(row)
-                stream.writeInt32(pos)
+                stream.writeInt32(ord)
         mimedata.setData('application/x-qabstractitemmodeldatalist', encoded_data)
         return mimedata
 
@@ -147,29 +135,33 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
             return False
         if not parent.isValid():
             return False
+        if row < 0:
+            return False
         encoded_data = mimedata.data('application/x-qabstractitemmodeldatalist')
         stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.ReadOnly)
         source_id = stream.readInt32() 
         print("source_id", source_id)
         source_row = stream.readInt32()
         print("source_row", source_row)
-        source_pos = stream.readInt32()
-        print("source_pos", source_pos)
-        dest_item = parent.internalPointer()
+        source_ord = stream.readInt32()
+        print("source_ord", source_ord)
+        parent_item = parent.internalPointer()
+        print("parent_item", parent_item)
         # if pos is -1, full channel move
-        if source_pos < 0:
-            if isinstance(dest_item, str):
+        if source_ord < 0:
+            if isinstance(parent_item, str):
+                print("end_row", row)
                 self.channel_mgr.move_channel(row, source_row)
-            if dest_item.id == source_id:
+            else: 
                 return False
-            self.channel_mgr.move_channel(parent.row(), source_row)
         else:
-            if isinstance(dest_item, Channel):
-                self.channel_mgr.move_bit(row, source_pos, source_row)
-            if dest_item.channel().id != source_id:
+            if isinstance(parent_item, Channel):
+                print("end_row", row)
+                self.channel_mgr.move_bit(row, source_ord, source_row)
+            else:
                 return False
-            self.channel_mgr.move_bit(parent.row(), source_pos, source_row)
-        return True   
+        return True
+
 
 class WaveformActiveChannelView(QtWidgets.QTreeView):
 
@@ -252,7 +244,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.channel_mgr.activeChannelsChanged.connect(self.update_channels)
         self.channel_mgr.expandedChannelsChanged.connect(self.update_channels)
         self.width, self.height = 100, 100
-        self.setSceneRect(0, 0, 100, 100)
+        self.setSceneRect(0, 0, 1000, 1000)
         self.setBackgroundBrush(Qt.black)
         self.channels = channel_mgr.active_channels
         self.x_scale, self.y_scale, self.row_scale = 100, 20, 1.1
@@ -305,6 +297,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.x_offset += int(event.delta())
         if self.x_offset > self.start_time * self.x_scale or self.x_offset < self.end_time * self.x_scale * -1:
             self.x_offset = temp
+        event.accept()
         self.refresh_display()
     
     # Override
@@ -322,6 +315,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.display_scale()
         self.display_graph()
         self.display_marker()
+        self.setSceneRect(self.itemsBoundingRect())
 
     def update_channels(self):
         self.channels = self.channel_mgr.active_channels
@@ -481,28 +475,19 @@ class ChannelManager(QtCore.QObject):
 
     def move_channel(self, dest, source):
         channel = self.active_channels[source]
-        if dest > source:
-            dest -= 1
-        else:
+        if source > dest:
             source += 1
         self.active_channels.insert(dest, channel)
         self.active_channels.pop(source)
         self.broadcast()
 
     def move_bit(self, dest, source, index):
-        print("dest", dest)
         channel = self.active_channels[index]
-        print(channel)
         bit = channel.bits[source]
-        print(bit)
-        if dest > source:
-            dest += 1
-        else:
+        if source > dest:
             source += 1
         channel.bits.insert(dest, bit)
-        print(channel.bits)
         channel.bits.pop(source)
-        print(channel.bits)
         self.active_channels[index] = channel
         self.broadcast()
 
