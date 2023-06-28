@@ -13,132 +13,85 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-# Modified from https://github.com/futal/simpletreemodel/blob/master/simpletreemodel.py
-class TreeItem:
-    id_obj = itertools.count(1)
-
-    def __init__(self, data, num=None, parent=None):
-        self.id = next(TreeItem.id_obj)
-        self._item_data = data
-        self._item_num = num 
-        self._parent_item = parent
-        self._child_items = []
-
-    def appendChild(self, item):
-        item._parent_item = self
-        self._child_items.append(item)
-
-    def child(self, row):
-        return self._child_items[row]
-
-    def children(self):
-        return self._child_items
-
-    def childCount(self):
-        return len(self._child_items)
-
-    def columnCount(self):
-        return len(self._item_data)
-
-    def data(self):
-        if not self._item_data:
-            return QtCore.QVariant()
-        return QtCore.QVariant(self._item_data)
-
-    def num(self):
-        return self._item_num
-
-    def setData(self, value):
-        self._item_data = value
-
-    def parent(self):
-        return self._parent_item
-
-    def row(self):
-        if self._parent_item:
-            return self._parent_item._child_items.index(self)
-        return 0
-
-    def insertChild(self, row, item):
-        self._child_items.insert(row, item)
-
-    def pop(self, row):
-        return self._child_items.pop(row)
-
-    def __eq__(self, other):
-        if other is None:
-            return False
-        return self.id == other.id
-
 class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
     refreshModel = QtCore.pyqtSignal()
 
     def __init__(self, parent=None, channel_mgr=None):
         super().__init__(parent)
-
         self.channel_mgr = channel_mgr
         self.active_channels = self.channel_mgr.active_channels
         self.channel_mgr.activeChannelsChanged.connect(self.update_active_channels)
+        self.beginResetModel()
         self._root_item = "Channels"
+        self.endResetModel()
 
     def rootIndex(self):
         return self.createIndex(0, 0, self._root_item)
 
     def flags(self, index):
-        defaultFlags = QtCore.QAbstractItemModel.flags(self, index)
-        if not index.isValid():
-            return defaultFlags
-        return Qt.ItemIsUserCheckable | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsSelectable | Qt.ItemIsEnabled | defaultFlags
+        flags = QtCore.QAbstractItemModel.flags(self, index)
+        if index.isValid():
+            flags |= Qt.ItemIsEnabled
+        if index != self.rootIndex():
+            flags |= Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsSelectable
+        return flags
 
     def data(self, index, role):
+        print("data")
         if not index.isValid():
-            return self._root_item
-        item = index.internalPointer()  
+            print("index not valid")
+            return "Invalid Index"
         if role == Qt.DisplayRole:
+            item = index.internalPointer()  
             if isinstance(item, Bit):
+                print("bit data")
                 channel = index.parent().internalPointer()
                 return channel.display_bit(item)
             elif isinstance(item, Channel):
+                print("channel data")
                 return item.display_name
             else:
+                print("header data")
                 return item
 
     def index(self, row, column, parent=QtCore.QModelIndex()):
+        print("index")
         if not self.hasIndex(row, column, parent):
-            return self.rootIndex()
+            return QtCore.QModelIndex()
         if not parent.isValid():
             return self.rootIndex()
+        parent_item = parent.internalPointer()
         if parent == self.rootIndex():
             return self.createIndex(row, column, self.active_channels[row])
-        bit_item = parent.internalPointer().bits[row]
-        if bit_item:
-            return self.createIndex(row, column, bit_item)
-        else:
-            return self.rootIndex()
+        return self.createIndex(row, column, parent_item.bits[row])
 
     def parent(self, index):
         if not index.isValid():
-            return self.rootIndex()
+            return QtCore.QModelIndex()
+        if index == self.rootIndex():
+            return QtCore.QModelIndex()
         item = index.internalPointer()
         if isinstance(item, Bit):
             channel = item.channel()
             row = self.active_channels.index(channel)
             return self.createIndex(row, 0, channel)
-        elif isinstance(item, Channel):
-            return self.rootIndex()
         else:
-            return QtCore.QModelIndex()
+            return self.rootIndex()
 
     def headerData(self, section, orientation, role):
         return ["Channels"]
 
     def rowCount(self, index=QtCore.QModelIndex()):
+        print("rowcount")
         if not index.isValid():
-            return len(self.active_channels)
+            print("index invalid")
+            return 1
         item = index.internalPointer()
         if isinstance(item, Bit):
+            print("is bit")
             return 0
         elif isinstance(item, Channel):
+            print("is channel")
             return len(item.bits)
         return len(self.active_channels)
 
@@ -203,7 +156,6 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         source_pos = stream.readInt32()
         print("source_pos", source_pos)
         dest_item = parent.internalPointer()
-
         # if pos is -1, full channel move
         if source_pos < 0:
             if isinstance(dest_item, str):
@@ -309,15 +261,29 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.timescale = 1
         self.start_time = 0
         self.end_time = 0
-        self.refresh_display()
         self.left_mouse_pressed = False
+        self.blue_pen = QtGui.QPen()
+        self.blue_pen.setStyle(Qt.SolidLine)
+        self.blue_pen.setWidth(1)
+        self.blue_pen.setBrush(Qt.blue)
+        self.font = QtGui.QFont("Monospace", pointSize=7)
+        self.green_pen = QtGui.QPen()
+        self.green_pen.setStyle(Qt.SolidLine)
+        self.green_pen.setWidth(1)
+        self.green_pen.setBrush(Qt.green)
+        self.red_pen = QtGui.QPen()
+        self.red_pen.setStyle(Qt.SolidLine)
+        self.red_pen.setWidth(1)
+        self.red_pen.setBrush(Qt.red)
+        self.dark_green_pen = QtGui.QPen()
+        self.dark_green_pen.setStyle(Qt.SolidLine)
+        self.dark_green_pen.setWidth(1)
+        self.dark_green_pen.setBrush(Qt.darkGreen)
+        self.marker_time = self.start_time
+        self.refresh_display()
 
     def display_scale(self):
-        pen = QtGui.QPen()
-        pen.setStyle(Qt.SolidLine)
-        pen.setWidth(1)
-        pen.setBrush(Qt.blue)
-        font = QtGui.QFont("Monospace", pointSize=7)
+        pen = self.blue_pen
         top_band_height = 16
         small_tick_height = 8
         vert_line_extra_length = 500
@@ -328,7 +294,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         t = self.start_time
         while t < self.end_time:
             self.addLine(self._transform_x(t), 0, self._transform_x(t), len(self.channels)*self.row_scale*self.y_scale + vert_line_extra_length, pen)
-            txt = self.addText(str(t) + " " + self.timescale_unit, font)
+            txt = self.addText(str(t) + " " + self.timescale_unit, self.font)
             txt.setPos(self._transform_x(t), 0)
             txt.setDefaultTextColor(QtGui.QColor(Qt.blue))
             t += self.timescale
@@ -340,11 +306,22 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         if self.x_offset > self.start_time * self.x_scale or self.x_offset < self.end_time * self.x_scale * -1:
             self.x_offset = temp
         self.refresh_display()
+    
+    # Override
+    def mouseDoubleClickEvent(self, event):
+        x = event.scenePos().x()  
+        self.marker_time = int(self._inverted_transform_x(x)) # TODO better type handling
+        self.refresh_display()
+
+    def display_marker(self):
+        x = self._transform_x(self.marker_time)
+        self.addLine(x, 0, x, 900, self.red_pen)
 
     def refresh_display(self):
         self.clear()
         self.display_scale()
         self.display_graph()
+        self.display_marker()
 
     def update_channels(self):
         self.channels = self.channel_mgr.active_channels
@@ -357,17 +334,14 @@ class WaveformScene(QtWidgets.QGraphicsScene):
             row = self._display_channel(channel, row)
 
     def _display_channel(self, channel, row):
-        pen = QtGui.QPen()
-        pen.setStyle(Qt.SolidLine)
-        pen.setWidth(1)
-        pen.setBrush(Qt.green)
-        sub_pen = QtGui.QPen()
-        sub_pen.setStyle(Qt.SolidLine)
-        sub_pen.setWidth(1)
-        sub_pen.setBrush(Qt.darkGreen)
+        pen = self.green_pen
+        sub_pen = self.dark_green_pen
         messages = self.channel_mgr.data[channel.name]
+        expd_channels = self.channel_mgr.expanded_channels
+        bits = channel.bits if channel.id in expd_channels else []
         current_value = messages[0][0]
         current_t = messages[0][1]
+        self._draw_value(current_t, current_value, row)
         for i in range(len(messages)):
             new_value = messages[i][0] 
             new_t = messages[i][1]
@@ -379,16 +353,22 @@ class WaveformScene(QtWidgets.QGraphicsScene):
                 else:
                     self.addLine(*self._transform_pos(current_t, current_value, new_t, current_value, row), pen)
                     self.addLine(*self._transform_pos(new_t, current_value, new_t, min(new_value, 1), row), pen)
-                if channel.id in self.channel_mgr.expanded_channels:
-                    for i, c in enumerate(channel.bits):
-                        curr_bit = (current_value >> c.pos()) & 1
-                        new_bit = (new_value >> c.pos()) & 1
-                        self.addLine(*self._transform_pos(current_t, curr_bit, new_t, curr_bit, row + i + 1), sub_pen)
-                        if new_bit != curr_bit:
-                            self.addLine(*self._transform_pos(new_t, 0, new_t, 1, row + i + 1), sub_pen)
+                self._draw_value(new_t, new_value, row)
+                for i, c in enumerate(bits):
+                    curr_bit = (current_value >> c.pos()) & 1
+                    new_bit = (new_value >> c.pos()) & 1
+                    self.addLine(*self._transform_pos(current_t, curr_bit, new_t, curr_bit, row + i + 1), sub_pen)
+                    if new_bit != curr_bit:
+                        self.addLine(*self._transform_pos(new_t, 0, new_t, 1, row + i + 1), sub_pen)
                 current_value = new_value
                 current_t = new_t
-        return row + 1 + len(channel.bits)
+        return row + 1 + len(bits)
+
+    def _draw_value(self, time, value, row):
+        x, y = self._transform_x_y(time, 1, row)
+        txt = self.addText(str(value), self.font)
+        txt.setPos(x, y)
+        txt.setDefaultTextColor(QtGui.QColor(Qt.white))
 
     def _transform_pos(self, x1, y1, x2, y2, row):
         rx1 = self._transform_x(x1)
@@ -397,11 +377,19 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         ry2 = self._transform_y(y2) + row * self.row_scale * self.y_scale
         return (rx1, ry1, rx2, ry2)
 
+    def _transform_x_y(self, x, y, row):
+        rx = self._transform_x(x)
+        ry = self._transform_y(y) + row * self.row_scale * self.y_scale
+        return rx, ry
+
     def _transform_x(self, x):
         return x * self.x_scale / self.timescale + self.x_offset
 
+    def _inverted_transform_x(self, x):
+        return (x - self.x_offset) * self.timescale / self.x_scale
+
     def _transform_y(self, y):
-        return y * self.y_scale + self.y_offset
+        return (1 - y) * self.y_scale + self.y_offset
 
     def increase_timescale(self):
         self.timescale *= 5
@@ -474,20 +462,18 @@ class ChannelManager(QtCore.QObject):
         if not index.isValid():
             return
         item = index.internalPointer()
-        if not isinstance(item, Channel):
-            return
-        id = index.internalPointer().id
-        self.expanded_channels.add(id)
+        if isinstance(item, Channel):
+            id = index.internalPointer().id
+            self.expanded_channels.add(id)
         self._expanded_emit()
 
     def collapse_channel(self, index):
         if not index.isValid():
             return
         item = index.internalPointer()
-        if not isinstance(item, Channel):
-            return
-        id = index.internalPointer().id
-        self.expanded_channels.remove(id)
+        if isinstance(item, Channel):
+            id = index.internalPointer().id
+            self.expanded_channels.remove(id)
         self._expanded_emit()
 
     def _expanded_emit(self):
@@ -592,27 +578,18 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.setObjectName("Waveform")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
                          QtWidgets.QDockWidget.DockWidgetFloatable)
-       
         self.channel_mgr = ChannelManager()
-
         grid = LayoutWidget()
         self.setWidget(grid)
-
         self.zoom_in_button = QtWidgets.QPushButton("Zoom In")
         grid.addWidget(self.zoom_in_button, 0, 0)
-
         self.zoom_out_button = QtWidgets.QPushButton("Zoom Out")
         grid.addWidget(self.zoom_out_button, 0, 1)
-
-
         self.waveform_active_channel_view = WaveformActiveChannelView(channel_mgr=self.channel_mgr)
         grid.addWidget(self.waveform_active_channel_view, 1, 0)
-
         self.waveform_scene = WaveformScene(channel_mgr=self.channel_mgr) 
         self.waveform_view = QtWidgets.QGraphicsView(self.waveform_scene)
         grid.addWidget(self.waveform_view, 1, 1)
-
         self.waveform_view.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        
         self.zoom_in_button.clicked.connect(self.waveform_scene.decrease_timescale)
         self.zoom_out_button.clicked.connect(self.waveform_scene.increase_timescale)
