@@ -2,6 +2,7 @@ from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtCore import Qt
 
 from artiq.gui.tools import LayoutWidget, get_open_file_name
+from artiq.dashboard.vcd_parser import SimpleVCDParser
 import numpy as np
 import pyqtgraph as pg
 import collections
@@ -590,6 +591,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         asyncio.ensure_future(self._load_trace_task())
 
     async def _load_trace_task(self):
+        vcd = None
         try:
             filename = await get_open_file_name(
                     self,
@@ -599,7 +601,9 @@ class WaveformDock(QtWidgets.QDockWidget):
         except asyncio.CancelledError:
             return
 
-        #try:
-        #    with open(filename, "r") as f:
-        #        pass
-        print(name)
+        try:
+            vcd = SimpleVCDParser(filename)
+        except:
+            logger.error("Failed to parse VCD file",
+                         exc_info=True)
+        print(vcd.data, vcd.channels)
