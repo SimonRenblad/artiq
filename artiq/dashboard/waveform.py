@@ -332,7 +332,11 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.display_scale()
         self.display_graph()
         self.display_marker()
-        self.setSceneRect(self.itemsBoundingRect())
+        height = self.itemsBoundingRect().height()
+        left = self._transform_x(self.start_time)
+        right = self._transform_x(self.end_time)
+        width = right - left
+        self.setSceneRect(left, 0, width, height)
 
     def update_channels(self):
         print("update_channels")
@@ -407,7 +411,8 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         if value == '1':
             return 1
         return 0
-
+    
+    # TODO: check that there is space to draw
     def _draw_value(self, time, value, row):
         x, y = self._transform_x_y(time, 1, row)
         txt = self.addText(str(value), self.font)
@@ -485,6 +490,7 @@ class Channel:
     def __repr__(self):
         return self.display_name + ": " + str(self.bits)
 
+# TODO separate out the data
 class ChannelManager(QtCore.QObject):
     activeChannelsChanged = QtCore.pyqtSignal()
     expandedChannelsChanged = QtCore.pyqtSignal()
@@ -553,13 +559,6 @@ class ChannelManager(QtCore.QObject):
     def broadcast_data(self):
         self.traceDataChanged.emit()
 
-    def get_max_time(self):
-        max_time = 0
-        for channel in self.active_channels:
-            channel_max = self.data[channel.name][-1][1]
-            max_time = max(max_time, channel_max)
-        return max_time
-    
     def add_channel(self, channel):
         self.active_channels.append(channel)
         self.broadcast_active()
@@ -612,9 +611,6 @@ class ChannelManager(QtCore.QObject):
             if channel.id == id:
                 return self.data[channel.name]
 
-    def load_data(self):
-        pass
-
 
 class WaveformDock(QtWidgets.QDockWidget):
     def __init__(self):
@@ -634,7 +630,11 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.save_trace_button = QtWidgets.QPushButton("Save Trace")
         grid.addWidget(self.save_trace_button, 0, 3)
         self.sync_button = QtWidgets.QPushButton("Sync")
-        grid.addWidget(self.sync_button, 0, 10)
+        grid.addWidget(self.sync_button, 0, 4)
+        self.start_time_edit_field = QtWidgets.QLineEdit()
+        grid.addWidget(self.start_time_edit_field, 0, 5)
+        self.end_time_edit_field = QtWidgets.QLineEdit()
+        grid.addWidget(self.end_time_edit_field, 0, 6)
         self.waveform_active_channel_view = WaveformActiveChannelView(channel_mgr=self.channel_mgr)
         grid.addWidget(self.waveform_active_channel_view, 1, 0, colspan=2)
         self.waveform_scene = WaveformScene(channel_mgr=self.channel_mgr) 
@@ -644,6 +644,18 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.zoom_in_button.clicked.connect(self.waveform_scene.decrease_timescale)
         self.zoom_out_button.clicked.connect(self.waveform_scene.increase_timescale)
         self.load_trace_button.clicked.connect(self._load_trace_clicked)
+        self.start_time_edit_field.editingFinished.connect(self._change_start_time)
+        self.end_time_edit_field.editingFinished.connect(self._change_end_time)
+
+    def _change_start_time(self):
+        start = int(self.start_time_edit_field.text())
+        self.channel_mgr.start_time = start
+        self.channel_mgr.broadcast_active()
+
+    def _change_end_time(self):
+        end = int(self.end_time_edit_field.text())
+        self.channel_mgr.start_time = start
+        self.channel_mgr.broadcast_active()
 
     def _load_trace_clicked(self):
         asyncio.ensure_future(self._load_trace_task())
@@ -661,6 +673,7 @@ class WaveformDock(QtWidgets.QDockWidget):
 
         try:
             vcd = SimpleVCDParser(filename)
+            # TODO: make a function instead
             self.channel_mgr.data = vcd.data
             self.channel_mgr.channels = vcd.channels
             self.channel_mgr.size = vcd.sizes
