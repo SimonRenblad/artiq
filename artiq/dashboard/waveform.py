@@ -100,7 +100,7 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         self.endResetModel()
 
     def emitDataChanged(self):
-        self.dataChanged.emit(QtCore.QModelIndex(), QtCore.QModelIndex())
+        self.traceDataChanged.emit(QtCore.QModelIndex(), QtCore.QModelIndex())
     
     def mimeTypes(self):
         return ['application/x-qabstractitemmodeldatalist']
@@ -213,11 +213,17 @@ class WaveformChannelList(QtWidgets.QListWidget):
         for channel in self.channel_mgr.channels:
             self.addItem(channel)
         self.itemDoubleClicked.connect(self.emit_add_channel)
+        self.channel_mgr.traceDataChanged.connect(self.update_channels)
 
     def emit_add_channel(self, item):
         s = item.text()
         self.channel_mgr.add_channel_by_name(s)
         self.add_channel_signal.emit()
+
+    def update_channels(self):
+        self.clear()
+        for channel in self.channel_mgr.channels:
+            self.addItem(channel)
 
 
 class AddChannelDialog(QtWidgets.QDialog):
@@ -244,7 +250,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.channel_mgr = channel_mgr
         self.channel_mgr.activeChannelsChanged.connect(self.update_channels)
         self.channel_mgr.expandedChannelsChanged.connect(self.update_channels)
-        self.width, self.height = 100, 100
+        self.channel_mgr.traceDataChanged.connect(self.update_channels)
         self.setSceneRect(0, 0, 1000, 1000)
         self.setBackgroundBrush(Qt.black)
         self.channels = channel_mgr.active_channels
@@ -272,10 +278,15 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.dark_green_pen.setStyle(Qt.SolidLine)
         self.dark_green_pen.setWidth(1)
         self.dark_green_pen.setBrush(Qt.darkGreen)
+        self.yellow_pen = QtGui.QPen()
+        self.yellow_pen.setStyle(Qt.SolidLine)
+        self.yellow_pen.setWidth(1)
+        self.yellow_pen.setBrush(Qt.yellow)
         self.marker_time = self.start_time
         self.refresh_display()
 
     def display_scale(self):
+        print("scale")
         pen = self.blue_pen
         top_band_height = 16
         small_tick_height = 8
@@ -283,6 +294,9 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         num_small_tick = 10 # should be factor of x_scale
         x_start = self._transform_x(self.start_time)
         x_end = self._transform_x(self.end_time)
+        print("start_t", self.start_time)
+        print("end_t", self.end_time)
+        print("timescale", self.timescale)
         self.addLine(x_start, top_band_height, x_end, top_band_height, pen)
         t = self.start_time
         while t < self.end_time:
@@ -293,13 +307,13 @@ class WaveformScene(QtWidgets.QGraphicsScene):
             t += self.timescale
     
     # Override
-    def wheelEvent(self, event):
-        temp = self.x_offset
-        self.x_offset += int(event.delta())
-        if self.x_offset > self.start_time * self.x_scale or self.x_offset < self.end_time * self.x_scale * -1:
-            self.x_offset = temp
-        event.accept()
-        self.refresh_display()
+    # def wheelEvent(self, event):
+    #     temp = self.x_offset
+    #     self.x_offset += int(event.delta())
+    #     if self.x_offset > self.start_time * self.x_scale or self.x_offset < self.end_time * self.x_scale * -1:
+    #         self.x_offset = temp
+    #     event.accept()
+    #     self.refresh_display()
     
     # Override
     def mouseDoubleClickEvent(self, event):
@@ -308,10 +322,12 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.refresh_display()
 
     def display_marker(self):
+        print("marker")
         x = self._transform_x(self.marker_time)
         self.addLine(x, 0, x, 900, self.red_pen)
 
     def refresh_display(self):
+        print("refresh_display")
         self.clear()
         self.display_scale()
         self.display_graph()
@@ -319,21 +335,29 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.setSceneRect(self.itemsBoundingRect())
 
     def update_channels(self):
+        print("update_channels")
         self.channels = self.channel_mgr.active_channels
-        self.end_time = self.channel_mgr.get_max_time()
+        self.timescale = self.channel_mgr.timescale_magnitude
+        self.timescale_unit = self.channel_mgr.unit
+        self.start_time = self.channel_mgr.start_time
+        self.end_time = self.channel_mgr.end_time
         self.refresh_display()
 
     def display_graph(self):
+        print("graph")
         row = 0
+        print(self.channels)
         for channel in self.channels:
             row = self._display_channel(channel, row)
 
     def _display_channel(self, channel, row):
         pen = self.green_pen
+        red_pen = self.red_pen
         sub_pen = self.dark_green_pen
         messages = self.channel_mgr.data[channel.name]
         expd_channels = self.channel_mgr.expanded_channels
         bits = channel.bits if channel.id in expd_channels else []
+        size = self.channel_mgr.size[channel.name]
         current_value = messages[0][0]
         current_t = messages[0][1]
         self._draw_value(current_t, current_value, row)
@@ -341,23 +365,48 @@ class WaveformScene(QtWidgets.QGraphicsScene):
             new_value = messages[i][0] 
             new_t = messages[i][1]
             if current_value != new_value:
-                if current_value > 1:
-                    self.addLine(*self._transform_pos(current_t, 0, new_t, 0, row), pen)
-                    self.addLine(*self._transform_pos(current_t, 1, new_t, 1, row), pen)
-                    self.addLine(*self._transform_pos(new_t, 0, new_t, 1, row), pen)
+                if size > 1:
+                    if 'x' in current_value or 'z' in current_value:
+                        pen = self.red_pen
+                    if len(new_value) != size: # make '0' into '00000000'
+                        new_value = new_value[0]*size 
+                    if current_value == '0'*size:
+                        self.addLine(*self._transform_pos(current_t, 0, new_t, 0, row), pen)
+                        self.addLine(*self._transform_pos(new_t, 0, new_t, 1, row), pen)
+                    else:
+                        self.addLine(*self._transform_pos(current_t, 0, new_t, 0, row), pen)
+                        self.addLine(*self._transform_pos(current_t, 1, new_t, 1, row), pen)
+                        self.addLine(*self._transform_pos(new_t, 0, new_t, 1, row), pen)
+                        pen = self.green_pen
+                    if current_t != new_t:
+                        self._draw_value(new_t, new_value, row)
+                    for i, c in enumerate(bits):
+                        curr_bit = current_value[c.pos()]
+                        new_bit = new_value[c.pos()]
+                        self._draw_line(current_t, curr_bit, new_t, new_bit, row + i + 1)
                 else:
-                    self.addLine(*self._transform_pos(current_t, current_value, new_t, current_value, row), pen)
-                    self.addLine(*self._transform_pos(new_t, current_value, new_t, min(new_value, 1), row), pen)
-                self._draw_value(new_t, new_value, row)
-                for i, c in enumerate(bits):
-                    curr_bit = (current_value >> c.pos()) & 1
-                    new_bit = (new_value >> c.pos()) & 1
-                    self.addLine(*self._transform_pos(current_t, curr_bit, new_t, curr_bit, row + i + 1), sub_pen)
-                    if new_bit != curr_bit:
-                        self.addLine(*self._transform_pos(new_t, 0, new_t, 1, row + i + 1), sub_pen)
+                        self._draw_line(current_t, current_value, new_t, new_value, row)
                 current_value = new_value
                 current_t = new_t
         return row + 1 + len(bits)
+
+    def _draw_line(self, c_t, c_val, n_t, n_val, row):
+        pen = self.green_pen
+        if c_val == 'x':
+            pen = self.red_pen
+        elif c_val == 'z':
+            pen = self.yellow_pen
+        c_val_temp = self._value_to_float(c_val)
+        n_val_temp = self._value_to_float(n_val)
+        self.addLine(*self._transform_pos(c_t, c_val_temp, n_t, c_val_temp, row), pen)
+        self.addLine(*self._transform_pos(n_t, c_val_temp, n_t, n_val_temp, row), pen)
+    
+    def _value_to_float(self, value):
+        if value == 'z':
+            return 0.5
+        if value == '1':
+            return 1
+        return 0
 
     def _draw_value(self, time, value, row):
         x, y = self._transform_x_y(time, 1, row)
@@ -427,7 +476,8 @@ class Channel:
                 return i
     
     def resetBits(self):
-        self.bits = [Bit(i, self) for i in range(self.size)]
+        if self.size > 1:
+            self.bits = [Bit(i, self) for i in range(self.size)]
 
     def display_bit(self, bit):
         return f"{self.name}[{bit.pos()}]"
@@ -438,6 +488,7 @@ class Channel:
 class ChannelManager(QtCore.QObject):
     activeChannelsChanged = QtCore.pyqtSignal()
     expandedChannelsChanged = QtCore.pyqtSignal()
+    traceDataChanged = QtCore.pyqtSignal()
 
     def __init__(self):
         QtCore.QObject.__init__(self) 
@@ -452,6 +503,10 @@ class ChannelManager(QtCore.QObject):
         self.active_channels = []
         self.channels = ["main_channel", "side_channel"]
         self.expanded_channels = set()
+        self.start_time = 0
+        self.end_time = 0
+        self.unit = 'ps'
+        self.timescale = 1
 
     def expand_channel(self, index):
         if not index.isValid():
@@ -480,7 +535,7 @@ class ChannelManager(QtCore.QObject):
             source += 1
         self.active_channels.insert(dest, channel)
         self.active_channels.pop(source)
-        self.broadcast()
+        self.broadcast_active()
 
     def move_bit(self, dest, source, index):
         channel = self.active_channels[index]
@@ -490,10 +545,13 @@ class ChannelManager(QtCore.QObject):
         channel.bits.insert(dest, bit)
         channel.bits.pop(source)
         self.active_channels[index] = channel
-        self.broadcast()
+        self.broadcast_active()
 
-    def broadcast(self):
+    def broadcast_active(self):
         self.activeChannelsChanged.emit()
+
+    def broadcast_data(self):
+        self.traceDataChanged.emit()
 
     def get_max_time(self):
         max_time = 0
@@ -504,21 +562,21 @@ class ChannelManager(QtCore.QObject):
     
     def add_channel(self, channel):
         self.active_channels.append(channel)
-        self.broadcast()
+        self.broadcast_active()
         return channel.id
 
     def add_channel_by_name(self, name):
         channel = Channel(name, self.size[name])
         channel.resetBits()
         self.active_channels.append(channel)
-        self.broadcast()
+        self.broadcast_active()
         return channel.id
 
     def remove_channel(self, id):
         for channel in self.active_channels:
             if channel.id == id:
                 self.active_channels.remove(channel)
-                self.broadcast()
+                self.broadcast_active()
                 return 
 
     def get_active_channels(self):
@@ -526,7 +584,7 @@ class ChannelManager(QtCore.QObject):
 
     def set_active_channels(self, active_channels):
         self.active_channels = active_channels
-        self.broadcast()
+        self.broadcast_active()
 
     def get_channel_from_id(self, id):
         for channel in self.active_channels:
@@ -543,11 +601,11 @@ class ChannelManager(QtCore.QObject):
 
     def collapse_row(self, row):
         self.active_channels[row].collapse()
-        self.broadcast()
+        self.broadcast_active()
 
     def expand_row(self, row):
         self.active_channels[row].expand()
-        self.broadcast()
+        self.broadcast_active()
 
     def get_data_from_id(self, id):
         for channel in self.active_channels:
@@ -603,7 +661,15 @@ class WaveformDock(QtWidgets.QDockWidget):
 
         try:
             vcd = SimpleVCDParser(filename)
+            self.channel_mgr.data = vcd.data
+            self.channel_mgr.channels = vcd.channels
+            self.channel_mgr.size = vcd.sizes
+            self.channel_mgr.start_time = vcd.start_time
+            self.channel_mgr.end_time = vcd.end_time
+            self.channel_mgr.timescale_magnitude = vcd.timescale_magnitude
+            self.channel_mgr.timescale_factor = vcd.timescale_factor
+            self.channel_mgr.unit = vcd.unit
+            self.channel_mgr.broadcast_data()
         except:
             logger.error("Failed to parse VCD file",
                          exc_info=True)
-        print(vcd.data, vcd.channels)

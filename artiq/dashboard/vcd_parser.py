@@ -6,7 +6,8 @@ class SimpleVCDParser:
     
     def __init__(self, filename):
         self.channels = []
-        self.timescale = 1e-12
+        self.timescale_magnitude = 1
+        self.timescale_factor = 1e-12
         self.unit = 'ps'
         self.codes = dict()
         self.data = dict()
@@ -55,7 +56,7 @@ class SimpleVCDParser:
     def _parse_channel(self, line):
         l = line.split()
         channel_type = l[1]
-        size = l[2]
+        size = int(l[2])
         code = l[3]
         name = ''.join(l[4:-1])
         self.codes[code] = name
@@ -80,5 +81,6 @@ class SimpleVCDParser:
                    'p': (1e-12, 'ps'),
                    'f': (1e-15, 'fs')}
         fac, unit = unit_mapping[rem[i]]
-        self.timescale = mag * fac
+        self.timescale_magnitude = mag
+        self.timescale_factor = fac
         self.unit = unit
