@@ -3,6 +3,7 @@ from PyQt5.QtCore import Qt
 
 from artiq.gui.tools import LayoutWidget, get_open_file_name
 from artiq.dashboard.vcd_parser import SimpleVCDParser
+from artiq.coredevice.comm_analyzer import decode_dump
 import numpy as np
 import pyqtgraph as pg
 import collections
@@ -665,15 +666,19 @@ class WaveformDock(QtWidgets.QDockWidget):
         try:
             filename = await get_open_file_name(
                     self,
-                    "Load Trace",
+                    "Load Raw Dump",
                     "c://",
-                    "VCD files (*.vcd);;All files (*.*)")
+                    "All files (*.*)")
         except asyncio.CancelledError:
             return
 
         try:
             vcd = SimpleVCDParser(filename)
-            # TODO: make a function instead
+            #with open(filename, 'rb') as f:
+            #    dump = f.read()
+
+            #decoded_dump = decode_dump(dump)
+            #print(decoded_dump.messages)
             self.channel_mgr.data = vcd.data
             self.channel_mgr.channels = vcd.channels
             self.channel_mgr.size = vcd.sizes
