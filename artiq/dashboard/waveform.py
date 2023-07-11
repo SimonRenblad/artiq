@@ -673,21 +673,21 @@ class WaveformDock(QtWidgets.QDockWidget):
             return
 
         try:
-            vcd = SimpleVCDParser(filename)
-            #with open(filename, 'rb') as f:
-            #    dump = f.read()
+            #vcd = SimpleVCDParser(filename)
+            with open(filename, 'rb') as f:
+                dump = f.read()
 
-            #decoded_dump = decode_dump(dump)
-            #print(decoded_dump.messages)
-            self.channel_mgr.data = vcd.data
-            self.channel_mgr.channels = vcd.channels
-            self.channel_mgr.size = vcd.sizes
-            self.channel_mgr.start_time = vcd.start_time
-            self.channel_mgr.end_time = vcd.end_time
-            self.channel_mgr.timescale_magnitude = vcd.timescale_magnitude
-            self.channel_mgr.timescale_factor = vcd.timescale_factor
-            self.channel_mgr.unit = vcd.unit
-            self.channel_mgr.broadcast_data()
+            decoded_dump = decode_dump(dump)
+            print(decoded_dump.messages)
+            #self.channel_mgr.data = vcd.data
+            #self.channel_mgr.channels = vcd.channels
+            #self.channel_mgr.size = vcd.sizes
+            #self.channel_mgr.start_time = vcd.start_time
+            #self.channel_mgr.end_time = vcd.end_time
+            #self.channel_mgr.timescale_magnitude = vcd.timescale_magnitude
+            #self.channel_mgr.timescale_factor = vcd.timescale_factor
+            #self.channel_mgr.unit = vcd.unit
+            #self.channel_mgr.broadcast_data()
         except:
             logger.error("Failed to parse VCD file",
                          exc_info=True)
