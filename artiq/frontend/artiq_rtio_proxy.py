@@ -17,11 +17,17 @@ class ProxyConnection:
         self.port = port
 
     # naive version read smth -> writes back synchronously
-    async def handle():
-        ty = self.reader.read(1) # read 1 byte
+    async def handle(self):
+        ty = await self.reader.read(1) # read 1 byte
         if ty == b"\x00": # get dump
             #dump = get_analyzer_dump(self.host, self.port) 
-            self.writer.write(b"\x69\x69")
+            dump = b"Hello World!\n"
+            with open("dump.bin", "rb") as f:
+                dump = f.read()
+            self.writer.write(dump)
+            self.writer.write_eof()
+            await self.writer.drain()
+            self.writer.close()
 
 # Proxy the core analyzer
 class ProxyServer(AsyncioServer):
