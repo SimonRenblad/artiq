@@ -1,6 +1,7 @@
 from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtCore import Qt
 
+from sipyco.keepalive import async_open_connection
 from artiq.gui.tools import LayoutWidget, get_open_file_name
 from artiq.dashboard.vcd_parser import SimpleVCDParser
 from artiq.coredevice.comm_analyzer import decode_dump
@@ -10,6 +11,7 @@ import collections
 import math
 import itertools
 import asyncio
+import struct
 
 import logging
 
@@ -645,6 +647,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.zoom_in_button.clicked.connect(self.waveform_scene.decrease_timescale)
         self.zoom_out_button.clicked.connect(self.waveform_scene.increase_timescale)
         self.load_trace_button.clicked.connect(self._load_trace_clicked)
+        self.sync_button.clicked.connect(self._sync_proxy_clicked)
         self.start_time_edit_field.editingFinished.connect(self._change_start_time)
         self.end_time_edit_field.editingFinished.connect(self._change_end_time)
 
@@ -660,6 +663,43 @@ class WaveformDock(QtWidgets.QDockWidget):
 
     def _load_trace_clicked(self):
         asyncio.ensure_future(self._load_trace_task())
+
+    def _sync_proxy_clicked(self):
+        asyncio.ensure_future(self._sync_proxy_task())
+
+    async def _sync_proxy_task(self):
+        # temp assumed variables -> set up subscriber and get the host + proxy port
+        self.rtio_addr = "localhost"
+        self.rtio_port = 1382 # proxy for rtio
+        try:
+            self._reader, self._writer = await async_open_connection(
+                    host=self.rtio_addr,
+                    port=self.rtio_port,
+                    after_idle=1,
+                    interval=1,
+                    max_fails=3,
+                )
+
+            try:
+                self._writer.write(b"ARTIQ rtio analyzer\n")
+                # self._receive_task = asyncio.ensure_future(self._receive_cr())
+            except:
+                self._writer.close()
+                del self._reader
+                del self._writer
+                raise
+        except asyncio.CancelledError:
+            logger.info("cancelled connection to rtio analyzer")
+        except:
+            logger.error("failed to connect to rtio analyzer. Is artiq_rtio_proxy running?", exc_info=True)
+        else:
+            logger.info("ARTIQ dashboard connected to moninj (%s)",
+                        self.rtio_addr)
+            self._writer.write(b"\x00")
+            dump = await self._reader.read()
+            self._reader.close()
+            decoded_dump = decode_dump(dump)
+            print(decoded_dump)
 
     async def _load_trace_task(self):
         vcd = None
