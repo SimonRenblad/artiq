@@ -668,6 +668,10 @@ class WaveformDock(QtWidgets.QDockWidget):
         asyncio.ensure_future(self._sync_proxy_task())
 
     async def _sync_proxy_task(self):
+        self.rtio_addr = "localhost"
+        self.rtio_port = 1382 # proxy for rtio
+
+    async def _two_way_comms(self):
         # temp assumed variables -> set up subscriber and get the host + proxy port
         self.rtio_addr = "localhost"
         self.rtio_port = 1382 # proxy for rtio
