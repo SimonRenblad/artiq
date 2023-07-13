@@ -4,7 +4,7 @@ from PyQt5.QtCore import Qt
 from sipyco.keepalive import async_open_connection
 from artiq.gui.tools import LayoutWidget, get_open_file_name
 from artiq.dashboard.vcd_parser import SimpleVCDParser
-from artiq.coredevice.comm_analyzer import decode_dump
+from artiq.coredevice.comm_analyzer import decode_dump, InputMessage, OutputMessage, StoppedMessage, ExceptionMessage
 import numpy as np
 import pyqtgraph as pg
 import collections
@@ -18,6 +18,28 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class Node:
+    def __init__(self, data):
+        self.data = data
+        self.parent = None
+        self.children = []
+
+class Tree:
+    def __init__(self, root):
+        self.root = Node(root)
+
+    def insert_channel(self, channel):
+        channel_node = Node(channel)
+        channel_node.parent = self.root
+        self.root.children.append(channel_node)
+
+    def insert_type(self, channel, msg_type):
+        for node in self.root.children:
+            if node.data == channel:
+                type_node = Node(msg_type)
+                type_node.parent = node
+                node.children.append(type_node)
+
 class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
     refreshModel = QtCore.pyqtSignal()
 
@@ -27,11 +49,12 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         self.active_channels = self.channel_mgr.active_channels
         self.channel_mgr.activeChannelsChanged.connect(self.update_active_channels)
         self.beginResetModel()
-        self._root_item = "Channels"
+        self._tree = Tree("Channels")
+        for act_channel in self.active_channels:
+            self._tree.insert_channel(act_channel[0])
+            for typ in act_channel[1]:
+                self._tree.insert_type(act_channel[0], typ)
         self.endResetModel()
-
-    def rootIndex(self):
-        return self.createIndex(0, 0, self._root_item)
 
     def flags(self, index):
         flags = QtCore.QAbstractItemModel.flags(self, index)
@@ -44,36 +67,27 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
             return "Invalid Index"
         if role == Qt.DisplayRole:
             item = index.internalPointer()  
-            if isinstance(item, Bit):
-                channel = index.parent().internalPointer()
-                return channel.display_bit(item)
-            elif isinstance(item, Channel):
-                return item.display_name
-            else:
-                return item
+            return item.data
 
     def index(self, row, column, parent=QtCore.QModelIndex()):
         if not self.hasIndex(row, column, parent):
             return QtCore.QModelIndex()
         if not parent.isValid():
-            return self.rootIndex()
+            return self.createIndex(0, 0, self._tree.root)
         parent_item = parent.internalPointer()
-        if parent == self.rootIndex():
-            return self.createIndex(row, column, self.active_channels[row])
-        return self.createIndex(row, column, parent_item.bits[row])
+        return self.createIndex(row, column, parent_item.children[row])
 
     def parent(self, index):
         if not index.isValid():
             return QtCore.QModelIndex()
-        if index == self.rootIndex():
-            return QtCore.QModelIndex()
         item = index.internalPointer()
-        if isinstance(item, Bit):
-            channel = item.channel()
-            row = self.active_channels.index(channel)
-            return self.createIndex(row, 0, channel)
-        else:
-            return self.rootIndex()
+        if item.parent is None:
+            return QtCore.QModelIndex()
+        parent_item = item.parent
+        if parent_item.parent is None:
+            return self.createIndex(0, 0, self._tree.root)
+        row = parent_item.parent.children.index(parent_item.data)
+        return self.createIndex(row, 0, self.parent_item)
 
     def headerData(self, section, orientation, role):
         return ["Channels"]
@@ -82,11 +96,9 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         if not index.isValid():
             return 1
         item = index.internalPointer()
-        if isinstance(item, Bit):
-            return 0
-        elif isinstance(item, Channel):
-            return len(item.bits)
-        return len(self.active_channels)
+        if item.parent is None:
+            return 1
+        return len(item.parent.children)
 
     def columnCount(self, parent=QtCore.QModelIndex()):
         return 1
@@ -100,72 +112,77 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
     def update_active_channels(self):
         self.beginResetModel()
         self.active_channels = self.channel_mgr.active_channels
+        self._tree = Tree("Channels")
+        for act_channel in self.active_channels:
+            self._tree.insert_channel(act_channel[0])
+            for typ in act_channel[1]:
+                self._tree.insert_type(act_channel[0], typ)
         self.endResetModel()
 
     def emitDataChanged(self):
         self.traceDataChanged.emit(QtCore.QModelIndex(), QtCore.QModelIndex())
     
-    def mimeTypes(self):
-        return ['application/x-qabstractitemmodeldatalist']
+    #def mimeTypes(self):
+    #    return ['application/x-qabstractitemmodeldatalist']
 
-    def mimeData(self, indexes):
-        mimedata = QtCore.QMimeData()
-        encoded_data = QtCore.QByteArray()
-        stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.WriteOnly)
-        for index in indexes:
-            if index.isValid():
-                item = index.internalPointer()
-                id = None
-                ord = None
-                row = index.row()
-                if isinstance(item, Bit):
-                    id = item.channel().id
-                    ord = item.channel().bits.index(item)
-                    row = self.channel_mgr.get_row_from_id(id)
-                elif isinstance(item, Channel):
-                    id = item.id
-                    ord = -1
-                stream.writeInt32(id)
-                stream.writeInt32(row)
-                stream.writeInt32(ord)
-        mimedata.setData('application/x-qabstractitemmodeldatalist', encoded_data)
-        return mimedata
+    #def mimeData(self, indexes):
+    #    mimedata = QtCore.QMimeData()
+    #    encoded_data = QtCore.QByteArray()
+    #    stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.WriteOnly)
+    #    for index in indexes:
+    #        if index.isValid():
+    #            item = index.internalPointer()
+    #            id = None
+    #            ord = None
+    #            row = index.row()
+    #            if isinstance(item, Bit):
+    #                id = item.channel().id
+    #                ord = item.channel().bits.index(item)
+    #                row = self.channel_mgr.get_row_from_id(id)
+    #            elif isinstance(item, Channel):
+    #                id = item.id
+    #                ord = -1
+    #            stream.writeInt32(id)
+    #            stream.writeInt32(row)
+    #            stream.writeInt32(ord)
+    #    mimedata.setData('application/x-qabstractitemmodeldatalist', encoded_data)
+    #    return mimedata
 
-    def dropMimeData(self, mimedata, action, row, column, parent):
-        if action == Qt.IgnoreAction:
-            return True
-        if not mimedata.hasFormat('application/x-qabstractitemmodeldatalist'):
-            return False
-        if column > 0:
-            return False
-        if not parent.isValid():
-            return False
-        if row < 0:
-            return False
-        encoded_data = mimedata.data('application/x-qabstractitemmodeldatalist')
-        stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.ReadOnly)
-        source_id = stream.readInt32() 
-        print("source_id", source_id)
-        source_row = stream.readInt32()
-        print("source_row", source_row)
-        source_ord = stream.readInt32()
-        print("source_ord", source_ord)
-        parent_item = parent.internalPointer()
-        print("parent_item", parent_item)
-        # if pos is -1, full channel move
-        if source_ord < 0:
-            if isinstance(parent_item, str):
-                print("end_row", row)
-                self.channel_mgr.move_channel(row, source_row)
-            else: 
-                return False
-        else:
-            if isinstance(parent_item, Channel):
-                print("end_row", row)
-                self.channel_mgr.move_bit(row, source_ord, source_row)
-            else:
-                return False
-        return True
+    #def dropMimeData(self, mimedata, action, row, column, parent):
+    #    if action == Qt.IgnoreAction:
+    #        return True
+    #    if not mimedata.hasFormat('application/x-qabstractitemmodeldatalist'):
+    #        return False
+    #    if column > 0:
+    #        return False
+    #    if not parent.isValid():
+    #        return False
+    #    if row < 0:
+    #        return False
+    #    encoded_data = mimedata.data('application/x-qabstractitemmodeldatalist')
+    #    stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.ReadOnly)
+    #    source_id = stream.readInt32() 
+    #    print("source_id", source_id)
+    #    source_row = stream.readInt32()
+    #    print("source_row", source_row)
+    #    source_ord = stream.readInt32()
+    #    print("source_ord", source_ord)
+    #    parent_item = parent.internalPointer()
+    #    print("parent_item", parent_item)
+    #    # if pos is -1, full channel move
+    #    if source_ord < 0:
+    #        if isinstance(parent_item, str):
+    #            print("end_row", row)
+    #            self.channel_mgr.move_channel(row, source_row)
+    #        else: 
+    #            return False
+    #    else:
+    #        if isinstance(parent_item, Channel):
+    #            print("end_row", row)
+    #            self.channel_mgr.move_bit(row, source_ord, source_row)
+    #        else:
+    #            return False
+    #    return True
 
 
 class WaveformActiveChannelView(QtWidgets.QTreeView):
@@ -189,8 +206,6 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
         self.addAction(add_channel)
         self.add_channel_dialog = AddChannelDialog(self, channel_mgr=self.channel_mgr)
         self.channel_mgr.activeChannelsChanged.connect(self.update_active_channels)
-        self.collapsed.connect(self.channel_mgr.collapse_channel)
-        self.expanded.connect(self.channel_mgr.expand_channel)
 
     def setSelectionAfterMove(self, index):
         self.selectionModel().select(index, QtCore.QItemSelectionModel.ClearAndSelect)
@@ -200,11 +215,6 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
 
     def update_active_channels(self):
         self.active_channels = self.channel_mgr.active_channels
-        self.setExpanded(self.model.rootIndex(), True)
-        for id in self.channel_mgr.expanded_channels:
-            row = self.channel_mgr.get_row_from_id(id)
-            index = self.model.index(row, 0, self.model.rootIndex())
-            self.setExpanded(index, True)
 
 
 class WaveformChannelList(QtWidgets.QListWidget):
@@ -214,19 +224,19 @@ class WaveformChannelList(QtWidgets.QListWidget):
         QtWidgets.QListWidget.__init__(self)
         self.channel_mgr = channel_mgr
         for channel in self.channel_mgr.channels:
-            self.addItem(channel)
+            self.addItem(str(channel))
         self.itemDoubleClicked.connect(self.emit_add_channel)
         self.channel_mgr.traceDataChanged.connect(self.update_channels)
 
     def emit_add_channel(self, item):
         s = item.text()
-        self.channel_mgr.add_channel_by_name(s)
+        self.channel_mgr.add_channel(int(s))
         self.add_channel_signal.emit()
 
     def update_channels(self):
         self.clear()
         for channel in self.channel_mgr.channels:
-            self.addItem(channel)
+            self.addItem(str(channel))
 
 
 class AddChannelDialog(QtWidgets.QDialog):
@@ -257,7 +267,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.setSceneRect(0, 0, 1000, 1000)
         self.setBackgroundBrush(Qt.black)
         self.channels = channel_mgr.active_channels
-        self.x_scale, self.y_scale, self.row_scale = 100, 20, 1.1
+        self.x_scale, self.y_scale, self.row_scale = 100, 100, 1.1
         self.x_offset, self.y_offset = 0, 30
         self.timescale_unit = "ps"
         self.timescale = 1
@@ -288,36 +298,6 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.marker_time = self.start_time
         self.refresh_display()
 
-    def display_scale(self):
-        print("scale")
-        pen = self.blue_pen
-        top_band_height = 16
-        small_tick_height = 8
-        vert_line_extra_length = 500
-        num_small_tick = 10 # should be factor of x_scale
-        x_start = self._transform_x(self.start_time)
-        x_end = self._transform_x(self.end_time)
-        print("start_t", self.start_time)
-        print("end_t", self.end_time)
-        print("timescale", self.timescale)
-        self.addLine(x_start, top_band_height, x_end, top_band_height, pen)
-        t = self.start_time
-        while t < self.end_time:
-            self.addLine(self._transform_x(t), 0, self._transform_x(t), len(self.channels)*self.row_scale*self.y_scale + vert_line_extra_length, pen)
-            txt = self.addText(str(t) + " " + self.timescale_unit, self.font)
-            txt.setPos(self._transform_x(t), 0)
-            txt.setDefaultTextColor(QtGui.QColor(Qt.blue))
-            t += self.timescale
-    
-    # Override
-    # def wheelEvent(self, event):
-    #     temp = self.x_offset
-    #     self.x_offset += int(event.delta())
-    #     if self.x_offset > self.start_time * self.x_scale or self.x_offset < self.end_time * self.x_scale * -1:
-    #         self.x_offset = temp
-    #     event.accept()
-    #     self.refresh_display()
-    
     # Override
     def mouseDoubleClickEvent(self, event):
         x = event.scenePos().x()  
@@ -332,7 +312,6 @@ class WaveformScene(QtWidgets.QGraphicsScene):
     def refresh_display(self):
         print("refresh_display")
         self.clear()
-        self.display_scale()
         self.display_graph()
         self.display_marker()
         height = self.itemsBoundingRect().height()
@@ -357,64 +336,64 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         for channel in self.channels:
             row = self._display_channel(channel, row)
 
+    # TODO: updates to display channel
+    # pull only needed data from message queue with filters (minimize copying / drawing)
+    # data can be prefiltered in channels, then by type
+    # display more detailed with a scale for each one and being able to see the wave
     def _display_channel(self, channel, row):
+        for msg_type in channel[1]:
+            row = self._display_waveform(channel[0], row, msg_type)
+        return row
+
+    def _normalize(self, x, min, max):
+        return (x-min)/(max-min)
+
+    # draw the waveform based on floats
+    # TODO: limit to visible + buffer
+    def _display_waveform(self, channel, row, msg_type, flags=None):
+        # object props:
+        # min, max rtio_counter values
+        # data
+        # row_scale
         pen = self.green_pen
         red_pen = self.red_pen
         sub_pen = self.dark_green_pen
-        messages = self.channel_mgr.data[channel.name]
-        expd_channels = self.channel_mgr.expanded_channels
-        bits = channel.bits if channel.id in expd_channels else []
-        size = self.channel_mgr.size[channel.name]
-        current_value = messages[0][0]
-        current_t = messages[0][1]
-        self._draw_value(current_t, current_value, row)
-        for i in range(len(messages)):
-            new_value = messages[i][0] 
-            new_t = messages[i][1]
-            if current_value != new_value:
-                if size > 1:
-                    if 'x' in current_value or 'z' in current_value:
-                        pen = self.red_pen
-                    if len(new_value) != size: # make '0' into '00000000'
-                        new_value = new_value[0]*size 
-                    if current_value == '0'*size:
-                        self.addLine(*self._transform_pos(current_t, 0, new_t, 0, row), pen)
-                        self.addLine(*self._transform_pos(new_t, 0, new_t, 1, row), pen)
-                    else:
-                        self.addLine(*self._transform_pos(current_t, 0, new_t, 0, row), pen)
-                        self.addLine(*self._transform_pos(current_t, 1, new_t, 1, row), pen)
-                        self.addLine(*self._transform_pos(new_t, 0, new_t, 1, row), pen)
-                        pen = self.green_pen
-                    if current_t != new_t:
-                        self._draw_value(new_t, new_value, row)
-                    for i, c in enumerate(bits):
-                        curr_bit = current_value[c.pos()]
-                        new_bit = new_value[c.pos()]
-                        self._draw_line(current_t, curr_bit, new_t, new_bit, row + i + 1)
-                else:
-                        self._draw_line(current_t, current_value, new_t, new_value, row)
-                current_value = new_value
-                current_t = new_t
-        return row + 1 + len(bits)
+        blue_pen = self.blue_pen
+        data = self.channel_mgr.data[channel][msg_type]
+        x_range = self.channel_mgr.x_range[channel][msg_type]
+        y_range = self.channel_mgr.y_range[channel][msg_type]
+        x_min = x_range[0]
+        x_max = x_range[1]
+        y_min = y_range[0]
+        y_max = y_range[1]
+        
+        if len(data) > 0:
+            # plot bottom line
+            self.addLine(*self._transform_pos(x_min, 0, x_max, 0, row), blue_pen)
 
-    def _draw_line(self, c_t, c_val, n_t, n_val, row):
-        pen = self.green_pen
-        if c_val == 'x':
-            pen = self.red_pen
-        elif c_val == 'z':
-            pen = self.yellow_pen
-        c_val_temp = self._value_to_float(c_val)
-        n_val_temp = self._value_to_float(n_val)
-        self.addLine(*self._transform_pos(c_t, c_val_temp, n_t, c_val_temp, row), pen)
-        self.addLine(*self._transform_pos(n_t, c_val_temp, n_t, n_val_temp, row), pen)
-    
-    def _value_to_float(self, value):
-        if value == 'z':
-            return 0.5
-        if value == '1':
-            return 1
-        return 0
-    
+            tick = 0
+            for x_start in range(int(x_min) - self.timescale + 1, int(x_min) + 1):
+                if x_start % self.timescale == 0:
+                    tick = x_start
+                    break
+
+            while tick <= x_max:
+                self.addLine(*self._transform_pos(tick, 0, tick, 1, row), blue_pen)
+                tick += self.timescale
+
+            # plot top line
+            self.addLine(*self._transform_pos(x_min, 1, x_max, 1, row), blue_pen)
+        
+        # plot messages
+        for msg in self.channel_mgr.data[channel][msg_type]:
+            r = msg.rtio_counter
+            d = msg.data
+            d_norm = self._normalize(d, y_min, y_max)
+            r_t, d_t = self._transform_x_y(r, d_norm, row)
+            self.addRect(r_t, d_t, 1, 1, pen, Qt.green)
+
+        return row + 1
+
     # TODO: check that there is space to draw
     def _draw_value(self, time, value, row):
         x, y = self._transform_x_y(time, 1, row)
@@ -440,6 +419,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
     def _inverted_transform_x(self, x):
         return (x - self.x_offset) * self.timescale / self.x_scale
 
+    # TODO: turn other way around
     def _transform_y(self, y):
         return (1 - y) * self.y_scale + self.y_offset
 
@@ -453,46 +433,6 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.refresh_display()
 
 
-class Bit:
-    def __init__(self, position, parent):
-        self.parent = parent
-        self.position = position
-
-    def pos(self):
-        return self.position
-
-    def channel(self):
-        return self.parent
-
-    def __repr__(self):
-        return str(self.pos())
-
-
-class Channel:
-    channel_id = itertools.count(1)
-
-    def __init__(self, name, size):
-        self.name = name
-        self.display_name = name if size == 1 else f"{name}[{size}]"
-        self.size = size
-        self.id = next(Channel.channel_id) 
-        self.bits = []
-
-    def get_row_from_pos(self, pos):
-        for i, bit in enumerate(self.bits):
-            if bit.pos() == pos:
-                return i
-    
-    def resetBits(self):
-        if self.size > 1:
-            self.bits = [Bit(i, self) for i in range(self.size)]
-
-    def display_bit(self, bit):
-        return f"{self.name}[{bit.pos()}]"
-
-    def __repr__(self):
-        return self.display_name + ": " + str(self.bits)
-
 # TODO separate out the data
 class ChannelManager(QtCore.QObject):
     activeChannelsChanged = QtCore.pyqtSignal()
@@ -501,39 +441,17 @@ class ChannelManager(QtCore.QObject):
 
     def __init__(self):
         QtCore.QObject.__init__(self) 
-        self.data = {
-            "main_channel": [(0,0),(1,10),(0,20)],
-            "side_channel": [(0,0),(1,10),(0,20)],
-        }
-        self.size = {
-            "main_channel": 8,
-            "side_channel": 8,
-        }
-        self.active_channels = []
-        self.channels = ["main_channel", "side_channel"]
+        self.data = dict()
+        self.x_range = dict()
+        self.y_range = dict()
+        self.active_channels = list()
+        self.channels = set()
         self.expanded_channels = set()
         self.start_time = 0
-        self.end_time = 0
+        self.end_time = 100
         self.unit = 'ps'
         self.timescale = 1
-
-    def expand_channel(self, index):
-        if not index.isValid():
-            return
-        item = index.internalPointer()
-        if isinstance(item, Channel):
-            id = index.internalPointer().id
-            self.expanded_channels.add(id)
-        self._expanded_emit()
-
-    def collapse_channel(self, index):
-        if not index.isValid():
-            return
-        item = index.internalPointer()
-        if isinstance(item, Channel):
-            id = index.internalPointer().id
-            self.expanded_channels.remove(id)
-        self._expanded_emit()
+        self.timescale_magnitude = 1
 
     def _expanded_emit(self):
         self.expandedChannelsChanged.emit()
@@ -546,16 +464,6 @@ class ChannelManager(QtCore.QObject):
         self.active_channels.pop(source)
         self.broadcast_active()
 
-    def move_bit(self, dest, source, index):
-        channel = self.active_channels[index]
-        bit = channel.bits[source]
-        if source > dest:
-            source += 1
-        channel.bits.insert(dest, bit)
-        channel.bits.pop(source)
-        self.active_channels[index] = channel
-        self.broadcast_active()
-
     def broadcast_active(self):
         self.activeChannelsChanged.emit()
 
@@ -563,23 +471,14 @@ class ChannelManager(QtCore.QObject):
         self.traceDataChanged.emit()
 
     def add_channel(self, channel):
-        self.active_channels.append(channel)
+        self.active_channels.append([channel, [0,1,2,3]])
         self.broadcast_active()
-        return channel.id
-
-    def add_channel_by_name(self, name):
-        channel = Channel(name, self.size[name])
-        channel.resetBits()
-        self.active_channels.append(channel)
-        self.broadcast_active()
-        return channel.id
+        return channel
 
     def remove_channel(self, id):
-        for channel in self.active_channels:
-            if channel.id == id:
-                self.active_channels.remove(channel)
-                self.broadcast_active()
-                return 
+        self.active_channels.remove(channel)
+        self.broadcast_active()
+        return 
 
     def get_active_channels(self):
         return self.active_channels
@@ -587,32 +486,6 @@ class ChannelManager(QtCore.QObject):
     def set_active_channels(self, active_channels):
         self.active_channels = active_channels
         self.broadcast_active()
-
-    def get_channel_from_id(self, id):
-        for channel in self.active_channels:
-            if channel.id == id:
-                return channel
-
-    def get_row_from_id(self, id):
-        for i, c in enumerate(self.active_channels):
-            if c.id == id:
-                return i
-                
-    def get_id_from_row(self, row):
-        return self.active_channels[row]
-
-    def collapse_row(self, row):
-        self.active_channels[row].collapse()
-        self.broadcast_active()
-
-    def expand_row(self, row):
-        self.active_channels[row].expand()
-        self.broadcast_active()
-
-    def get_data_from_id(self, id):
-        for channel in self.active_channels:
-            if channel.id == id:
-                return self.data[channel.name]
 
 
 class WaveformDock(QtWidgets.QDockWidget):
@@ -624,15 +497,30 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.channel_mgr = ChannelManager()
         grid = LayoutWidget()
         self.setWidget(grid)
-        self.zoom_in_button = QtWidgets.QPushButton("+")
+        self.zoom_in_button = QtWidgets.QPushButton()
+        self.zoom_in_button.setIcon(
+                QtWidgets.QApplication.style().standardIcon(
+                    QtWidgets.QStyle.SP_ArrowDown))
         grid.addWidget(self.zoom_in_button, 0, 0)
-        self.zoom_out_button = QtWidgets.QPushButton("-")
+        self.zoom_out_button = QtWidgets.QPushButton()
+        self.zoom_out_button.setIcon(
+                QtWidgets.QApplication.style().standardIcon(
+                    QtWidgets.QStyle.SP_ArrowUp))
         grid.addWidget(self.zoom_out_button, 0, 1)
         self.load_trace_button = QtWidgets.QPushButton("Load Trace")
+        self.load_trace_button.setIcon(
+                QtWidgets.QApplication.style().standardIcon(
+                    QtWidgets.QStyle.SP_DialogOpenButton))
         grid.addWidget(self.load_trace_button, 0, 2)
         self.save_trace_button = QtWidgets.QPushButton("Save Trace")
+        self.save_trace_button.setIcon(
+                QtWidgets.QApplication.style().standardIcon(
+                    QtWidgets.QStyle.SP_DriveFDIcon))
         grid.addWidget(self.save_trace_button, 0, 3)
         self.sync_button = QtWidgets.QPushButton("Sync")
+        self.sync_button.setIcon(
+                QtWidgets.QApplication.style().standardIcon(
+                    QtWidgets.QStyle.SP_BrowserReload))
         grid.addWidget(self.sync_button, 0, 4)
         self.start_time_edit_field = QtWidgets.QLineEdit()
         grid.addWidget(self.start_time_edit_field, 0, 5)
@@ -644,6 +532,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.waveform_view = QtWidgets.QGraphicsView(self.waveform_scene)
         grid.addWidget(self.waveform_view, 1, 2, colspan=10)
         self.waveform_view.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+
         self.zoom_in_button.clicked.connect(self.waveform_scene.decrease_timescale)
         self.zoom_out_button.clicked.connect(self.waveform_scene.increase_timescale)
         self.load_trace_button.clicked.connect(self._load_trace_clicked)
@@ -668,10 +557,6 @@ class WaveformDock(QtWidgets.QDockWidget):
         asyncio.ensure_future(self._sync_proxy_task())
 
     async def _sync_proxy_task(self):
-        self.rtio_addr = "localhost"
-        self.rtio_port = 1382 # proxy for rtio
-
-    async def _two_way_comms(self):
         # temp assumed variables -> set up subscriber and get the host + proxy port
         self.rtio_addr = "localhost"
         self.rtio_port = 1382 # proxy for rtio
@@ -703,7 +588,8 @@ class WaveformDock(QtWidgets.QDockWidget):
             dump = await self._reader.read()
             self._reader.close()
             decoded_dump = decode_dump(dump)
-            print(decoded_dump)
+            self.messages = decoded_dump.messages
+            self._parse_messages(messages)
 
     async def _load_trace_task(self):
         vcd = None
@@ -715,23 +601,70 @@ class WaveformDock(QtWidgets.QDockWidget):
                     "All files (*.*)")
         except asyncio.CancelledError:
             return
-
         try:
-            #vcd = SimpleVCDParser(filename)
             with open(filename, 'rb') as f:
                 dump = f.read()
 
             decoded_dump = decode_dump(dump)
-            print(decoded_dump.messages)
-            #self.channel_mgr.data = vcd.data
-            #self.channel_mgr.channels = vcd.channels
-            #self.channel_mgr.size = vcd.sizes
-            #self.channel_mgr.start_time = vcd.start_time
-            #self.channel_mgr.end_time = vcd.end_time
-            #self.channel_mgr.timescale_magnitude = vcd.timescale_magnitude
-            #self.channel_mgr.timescale_factor = vcd.timescale_factor
-            #self.channel_mgr.unit = vcd.unit
-            #self.channel_mgr.broadcast_data()
+            self._parse_messages(decoded_dump.messages)
         except:
             logger.error("Failed to parse VCD file",
                          exc_info=True)
+
+    def _message_type(self, typ):
+        if isinstance(typ, OutputMessage):
+            return 0
+        if isinstance(typ, InputMessage):
+            return 1
+        if isinstance(typ, ExceptionMessage):
+            return 2
+        if isinstance(typ, StoppedMessage):
+            return 3
+        print("invalid message type")
+
+    def _parse_messages(self, messages):
+        channels = set()
+        for message in messages:
+            message_type = self._message_type(message)
+            channels.add(message.channel)
+        self.channel_mgr.channels = channels
+        data = dict()
+        x_range = dict()
+        y_range = dict()
+        for channel in channels:
+            data[channel] = {
+                    0: [],
+                    1: [],
+                    2: [],
+                    3: []
+            }
+            x_range[channel] = {
+                    0: [float("inf"), -float("inf")],
+                    1: [float("inf"), -float("inf")],
+                    2: [float("inf"), -float("inf")],
+                    3: [float("inf"), -float("inf")]
+            }
+            y_range[channel] = {
+                    0: [float("inf"), -float("inf")],
+                    1: [float("inf"), -float("inf")],
+                    2: [float("inf"), -float("inf")],
+                    3: [float("inf"), -float("inf")]
+            }
+        for message in messages:
+            message_type = self._message_type(message)
+            channel = message.channel
+            data[channel][message_type].append(message)
+            # handle data range min and max 
+            if message.rtio_counter < x_range[channel][message_type][0]:
+                x_range[channel][message_type][0] = message.rtio_counter 
+            if message.rtio_counter > x_range[channel][message_type][1]:
+                x_range[channel][message_type][1] = message.rtio_counter 
+            if message.data < y_range[channel][message_type][0]:
+                y_range[channel][message_type][0] = message.data 
+            if message.data > y_range[channel][message_type][1]:
+                y_range[channel][message_type][1] = message.data 
+
+        self.channel_mgr.data = data
+        self.channel_mgr.x_range = x_range
+        self.channel_mgr.y_range = y_range
+        self.channel_mgr.traceDataChanged.emit()
