@@ -264,7 +264,7 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.channel_mgr.activeChannelsChanged.connect(self.update_channels)
         self.channel_mgr.expandedChannelsChanged.connect(self.update_channels)
         self.channel_mgr.traceDataChanged.connect(self.update_channels)
-        self.setSceneRect(0, 0, 1000, 1000)
+        self.setSceneRect(0, 0, 500, 500)
         self.setBackgroundBrush(Qt.black)
         self.channels = channel_mgr.active_channels
         self.x_scale, self.y_scale, self.row_scale = 100, 100, 1.1
@@ -330,6 +330,9 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.refresh_display()
 
     def display_graph(self):
+        self.plotWidget = pg.PlotWidget()
+        self.plotWidget.showGrid(True, True, 0.5)
+        self.addWidget(self.plotWidget)
         print("graph")
         row = 0
         print(self.channels)
@@ -360,37 +363,40 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         sub_pen = self.dark_green_pen
         blue_pen = self.blue_pen
         data = self.channel_mgr.data[channel][msg_type]
+        x_data = [x.rtio_counter for x in data]
+        y_data = [y.data for y in data]
         x_range = self.channel_mgr.x_range[channel][msg_type]
         y_range = self.channel_mgr.y_range[channel][msg_type]
         x_min = x_range[0]
         x_max = x_range[1]
         y_min = y_range[0]
         y_max = y_range[1]
-        
-        if len(data) > 0:
-            # plot bottom line
-            self.addLine(*self._transform_pos(x_min, 0, x_max, 0, row), blue_pen)
 
-            tick = 0
-            for x_start in range(int(x_min) - self.timescale + 1, int(x_min) + 1):
-                if x_start % self.timescale == 0:
-                    tick = x_start
-                    break
+        plot_item = self.plotWidget.plot(x_data, y_data)
+        # if len(data) > 0:
+        #     # plot bottom line
+        #     self.addLine(*self._transform_pos(x_min, 0, x_max, 0, row), blue_pen)
 
-            while tick <= x_max:
-                self.addLine(*self._transform_pos(tick, 0, tick, 1, row), blue_pen)
-                tick += self.timescale
+        #     tick = 0
+        #     for x_start in range(int(x_min) - self.timescale + 1, int(x_min) + 1):
+        #         if x_start % self.timescale == 0:
+        #             tick = x_start
+        #             break
 
-            # plot top line
-            self.addLine(*self._transform_pos(x_min, 1, x_max, 1, row), blue_pen)
-        
-        # plot messages
-        for msg in self.channel_mgr.data[channel][msg_type]:
-            r = msg.rtio_counter
-            d = msg.data
-            d_norm = self._normalize(d, y_min, y_max)
-            r_t, d_t = self._transform_x_y(r, d_norm, row)
-            self.addRect(r_t, d_t, 1, 1, pen, Qt.green)
+        #     while tick <= x_max:
+        #         self.addLine(*self._transform_pos(tick, 0, tick, 1, row), blue_pen)
+        #         tick += self.timescale
+
+        #     # plot top line
+        #     self.addLine(*self._transform_pos(x_min, 1, x_max, 1, row), blue_pen)
+        # 
+        # # plot messages
+        # for msg in self.channel_mgr.data[channel][msg_type]:
+        #     r = msg.rtio_counter
+        #     d = msg.data
+        #     d_norm = self._normalize(d, y_min, y_max)
+        #     r_t, d_t = self._transform_x_y(r, d_norm, row)
+        #     self.addRect(r_t, d_t, 1, 1, pen, Qt.green)
 
         return row + 1
 
