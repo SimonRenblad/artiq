@@ -24,6 +24,11 @@ class Node:
         self.parent = None
         self.children = []
 
+    def print_node(self):
+        print(self.data)
+        for c in self.children:
+            c.print_node()
+
 class Tree:
     def __init__(self, root):
         self.root = Node(root)
@@ -40,6 +45,9 @@ class Tree:
                 type_node.parent = node
                 node.children.append(type_node)
 
+    def print_tree(self):
+        self.root.print_node()
+
 class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
     refreshModel = QtCore.pyqtSignal()
 
@@ -54,6 +62,7 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
             self._tree.insert_channel(act_channel[0])
             for typ in act_channel[1]:
                 self._tree.insert_type(act_channel[0], typ)
+        self._tree.print_tree()
         self.endResetModel()
 
     def flags(self, index):
@@ -86,8 +95,9 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         parent_item = item.parent
         if parent_item.parent is None:
             return self.createIndex(0, 0, self._tree.root)
-        row = parent_item.parent.children.index(parent_item.data)
-        return self.createIndex(row, 0, self.parent_item)
+        parent_item.parent.print_node()
+        row = parent_item.parent.children.index(parent_item)
+        return self.createIndex(row, 0, parent_item)
 
     def headerData(self, section, orientation, role):
         return ["Channels"]
@@ -96,9 +106,7 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         if not index.isValid():
             return 1
         item = index.internalPointer()
-        if item.parent is None:
-            return 1
-        return len(item.parent.children)
+        return len(item.children)
 
     def columnCount(self, parent=QtCore.QModelIndex()):
         return 1
@@ -118,6 +126,7 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
             for typ in act_channel[1]:
                 self._tree.insert_type(act_channel[0], typ)
         self.endResetModel()
+        self._tree.print_tree()
 
     def emitDataChanged(self):
         self.traceDataChanged.emit(QtCore.QModelIndex(), QtCore.QModelIndex())
