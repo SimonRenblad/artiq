@@ -62,7 +62,6 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
             self._tree.insert_channel(act_channel[0])
             for typ in act_channel[1]:
                 self._tree.insert_type(act_channel[0], typ)
-        self._tree.print_tree()
         self.endResetModel()
 
     def flags(self, index):
@@ -95,7 +94,6 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
         parent_item = item.parent
         if parent_item.parent is None:
             return self.createIndex(0, 0, self._tree.root)
-        parent_item.parent.print_node()
         row = parent_item.parent.children.index(parent_item)
         return self.createIndex(row, 0, parent_item)
 
@@ -126,7 +124,6 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
             for typ in act_channel[1]:
                 self._tree.insert_type(act_channel[0], typ)
         self.endResetModel()
-        self._tree.print_tree()
 
     def emitDataChanged(self):
         self.traceDataChanged.emit(QtCore.QModelIndex(), QtCore.QModelIndex())
@@ -266,22 +263,23 @@ class AddChannelDialog(QtWidgets.QDialog):
         self.close()
 
 
-class WaveformScene(QtWidgets.QGraphicsScene):
+class WaveformsWidget(QtWidgets.QWidget):
     def __init__(self, parent=None, channel_mgr=None):
-        QtWidgets.QGraphicsScene.__init__(self, parent)
+        QtWidgets.QWidget.__init__(self, parent)
+        #self.vbox = QtWidgets.QVBoxLayout()
+        self.grid = QtWidgets.QGridLayout()
+        self.setLayout(self.grid)
+        self.plot_widget = pg.PlotWidget()
+        self.plot_widget.addLegend()
+        self.grid.addWidget(self.plot_widget, 0, 0)
         self.channel_mgr = channel_mgr
         self.channel_mgr.activeChannelsChanged.connect(self.update_channels)
         self.channel_mgr.expandedChannelsChanged.connect(self.update_channels)
         self.channel_mgr.traceDataChanged.connect(self.update_channels)
-        self.setSceneRect(0, 0, 500, 500)
-        self.setBackgroundBrush(Qt.black)
         self.channels = channel_mgr.active_channels
-        self.x_scale, self.y_scale, self.row_scale = 100, 100, 1.1
-        self.x_offset, self.y_offset = 0, 30
+        self.channel_plots = list()
         self.timescale_unit = "ps"
         self.timescale = 1
-        self.start_time = 0
-        self.end_time = 0
         self.left_mouse_pressed = False
         self.blue_pen = QtGui.QPen()
         self.blue_pen.setStyle(Qt.SolidLine)
@@ -304,69 +302,32 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         self.yellow_pen.setStyle(Qt.SolidLine)
         self.yellow_pen.setWidth(1)
         self.yellow_pen.setBrush(Qt.yellow)
-        self.marker_time = self.start_time
         self.refresh_display()
-
-    # Override
-    def mouseDoubleClickEvent(self, event):
-        x = event.scenePos().x()  
-        self.marker_time = int(self._inverted_transform_x(x)) # TODO better type handling
-        self.refresh_display()
-
-    def display_marker(self):
-        print("marker")
-        x = self._transform_x(self.marker_time)
-        self.addLine(x, 0, x, 900, self.red_pen)
 
     def refresh_display(self):
         print("refresh_display")
-        self.clear()
         self.display_graph()
-        self.display_marker()
-        height = self.itemsBoundingRect().height()
-        left = self._transform_x(self.start_time)
-        right = self._transform_x(self.end_time)
-        width = right - left
-        self.setSceneRect(left, 0, width, height)
 
     def update_channels(self):
         print("update_channels")
         self.channels = self.channel_mgr.active_channels
         self.timescale = self.channel_mgr.timescale_magnitude
         self.timescale_unit = self.channel_mgr.unit
-        self.start_time = self.channel_mgr.start_time
-        self.end_time = self.channel_mgr.end_time
         self.refresh_display()
 
     def display_graph(self):
-        self.plotWidget = pg.PlotWidget()
-        self.plotWidget.showGrid(True, True, 0.5)
-        self.addWidget(self.plotWidget)
         print("graph")
         row = 0
         print(self.channels)
         for channel in self.channels:
             row = self._display_channel(channel, row)
 
-    # TODO: updates to display channel
-    # pull only needed data from message queue with filters (minimize copying / drawing)
-    # data can be prefiltered in channels, then by type
-    # display more detailed with a scale for each one and being able to see the wave
     def _display_channel(self, channel, row):
         for msg_type in channel[1]:
             row = self._display_waveform(channel[0], row, msg_type)
         return row
 
-    def _normalize(self, x, min, max):
-        return (x-min)/(max-min)
-
-    # draw the waveform based on floats
-    # TODO: limit to visible + buffer
     def _display_waveform(self, channel, row, msg_type, flags=None):
-        # object props:
-        # min, max rtio_counter values
-        # data
-        # row_scale
         pen = self.green_pen
         red_pen = self.red_pen
         sub_pen = self.dark_green_pen
@@ -376,77 +337,13 @@ class WaveformScene(QtWidgets.QGraphicsScene):
         y_data = [y.data for y in data]
         x_range = self.channel_mgr.x_range[channel][msg_type]
         y_range = self.channel_mgr.y_range[channel][msg_type]
-        x_min = x_range[0]
-        x_max = x_range[1]
-        y_min = y_range[0]
-        y_max = y_range[1]
 
-        plot_item = self.plotWidget.plot(x_data, y_data)
-        # if len(data) > 0:
-        #     # plot bottom line
-        #     self.addLine(*self._transform_pos(x_min, 0, x_max, 0, row), blue_pen)
-
-        #     tick = 0
-        #     for x_start in range(int(x_min) - self.timescale + 1, int(x_min) + 1):
-        #         if x_start % self.timescale == 0:
-        #             tick = x_start
-        #             break
-
-        #     while tick <= x_max:
-        #         self.addLine(*self._transform_pos(tick, 0, tick, 1, row), blue_pen)
-        #         tick += self.timescale
-
-        #     # plot top line
-        #     self.addLine(*self._transform_pos(x_min, 1, x_max, 1, row), blue_pen)
-        # 
-        # # plot messages
-        # for msg in self.channel_mgr.data[channel][msg_type]:
-        #     r = msg.rtio_counter
-        #     d = msg.data
-        #     d_norm = self._normalize(d, y_min, y_max)
-        #     r_t, d_t = self._transform_x_y(r, d_norm, row)
-        #     self.addRect(r_t, d_t, 1, 1, pen, Qt.green)
-
+        if row < len(self.channel_plots):
+            self.channel_plots[row].setData(x_data, y_data)
+        else:
+            pdi = self.plot_widget.plot(x_data, y_data, name=f"Channel: {channel}, Type: {msg_type}")
+            self.channel_plots.append(pdi)
         return row + 1
-
-    # TODO: check that there is space to draw
-    def _draw_value(self, time, value, row):
-        x, y = self._transform_x_y(time, 1, row)
-        txt = self.addText(str(value), self.font)
-        txt.setPos(x, y)
-        txt.setDefaultTextColor(QtGui.QColor(Qt.white))
-
-    def _transform_pos(self, x1, y1, x2, y2, row):
-        rx1 = self._transform_x(x1)
-        rx2 = self._transform_x(x2)
-        ry1 = self._transform_y(y1) + row * self.row_scale * self.y_scale
-        ry2 = self._transform_y(y2) + row * self.row_scale * self.y_scale
-        return (rx1, ry1, rx2, ry2)
-
-    def _transform_x_y(self, x, y, row):
-        rx = self._transform_x(x)
-        ry = self._transform_y(y) + row * self.row_scale * self.y_scale
-        return rx, ry
-
-    def _transform_x(self, x):
-        return x * self.x_scale / self.timescale + self.x_offset
-
-    def _inverted_transform_x(self, x):
-        return (x - self.x_offset) * self.timescale / self.x_scale
-
-    # TODO: turn other way around
-    def _transform_y(self, y):
-        return (1 - y) * self.y_scale + self.y_offset
-
-    def increase_timescale(self):
-        self.timescale *= 5
-        self.refresh_display()
-
-    def decrease_timescale(self):
-        if not self.timescale < 5:
-            self.timescale = self.timescale // 5
-        self.refresh_display()
-
 
 # TODO separate out the data
 class ChannelManager(QtCore.QObject):
@@ -543,13 +440,10 @@ class WaveformDock(QtWidgets.QDockWidget):
         grid.addWidget(self.end_time_edit_field, 0, 6)
         self.waveform_active_channel_view = WaveformActiveChannelView(channel_mgr=self.channel_mgr)
         grid.addWidget(self.waveform_active_channel_view, 1, 0, colspan=2)
-        self.waveform_scene = WaveformScene(channel_mgr=self.channel_mgr) 
-        self.waveform_view = QtWidgets.QGraphicsView(self.waveform_scene)
-        grid.addWidget(self.waveform_view, 1, 2, colspan=10)
-        self.waveform_view.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-
-        self.zoom_in_button.clicked.connect(self.waveform_scene.decrease_timescale)
-        self.zoom_out_button.clicked.connect(self.waveform_scene.increase_timescale)
+        self.waveform_widget = WaveformsWidget(channel_mgr=self.channel_mgr) 
+        self.waveform_scroll = QtWidgets.QScrollArea()
+        self.waveform_scroll.setWidget(self.waveform_widget)
+        grid.addWidget(self.waveform_scroll, 1, 2, colspan=10)
         self.load_trace_button.clicked.connect(self._load_trace_clicked)
         self.sync_button.clicked.connect(self._sync_proxy_clicked)
         self.start_time_edit_field.editingFinished.connect(self._change_start_time)
