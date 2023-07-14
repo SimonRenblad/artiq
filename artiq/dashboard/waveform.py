@@ -12,6 +12,7 @@ import math
 import itertools
 import asyncio
 import struct
+from enum import Enum
 
 import logging
 
@@ -151,17 +152,50 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setDragEnabled(True)
         self.setDropIndicatorShown(True)
+        #self.setItemsExpandable(False)
+        #self.setRootIsDecorated(False)
         self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
         self.model = WaveformActiveChannelModel(channel_mgr=self.channel_mgr)
         self.setModel(self.model)
+        self.model.modelReset.connect(lambda x: self.expandAll())
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
         add_channel = QtWidgets.QAction("Add channel", self)
         add_channel.triggered.connect(self.add_channel_widget)
         add_channel.setShortcut("CTRL+N")
         add_channel.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel)
+
+        self.data_format_menu = QtWidgets.QMenu("Data Format")
+        self.int_format = QtWidgets.QAction("Int")
+        self.float_format = QtWidgets.QAction("Float")
+        self.data_format_menu.addAction(self.int_format)
+        self.data_format_menu.addAction(self.float_format)
+
+        self.data_format_action = QtWidgets.QAction("Data Format")
+        self.data_format_action.setMenu(self.data_format_menu)
+        self.addAction(self.data_format_action)
+
+        self.int_format.triggered.connect(self.set_int_format)
+        self.float_format.triggered.connect(self.set_float_format)
+
         self.add_channel_dialog = AddChannelDialog(self, channel_mgr=self.channel_mgr)
         self.channel_mgr.activeChannelsChanged.connect(self.update_active_channels)
+
+    def set_format(self, ty):
+        index = self.selectionModel().selectedIndexes()[0]
+        item = index.internalPointer()
+        if not item.children:
+            msg_type = item.data
+            channel = item.parent.data
+            self.channel_mgr.display_types[channel][msg_type] = ty
+            self.channel_mgr.expandedChannelsChanged.emit()
+
+
+    def set_int_format(self):
+        self.set_format(DisplayType.INT_64)
+
+    def set_float_format(self):
+        self.set_format(DisplayType.FLOAT_64)
 
     def setSelectionAfterMove(self, index):
         self.selectionModel().select(index, QtCore.QItemSelectionModel.ClearAndSelect)
@@ -212,6 +246,10 @@ class AddChannelDialog(QtWidgets.QDialog):
     def add_channel(self):
         self.close()
 
+class DisplayType(Enum):
+    INT_64 = 0
+    FLOAT_64 = 1
+
 
 class WaveformWidget(pg.PlotWidget):
     def __init__(self, parent=None, channel_mgr=None):
@@ -224,6 +262,7 @@ class WaveformWidget(pg.PlotWidget):
         self.channel_mgr.expandedChannelsChanged.connect(self.update_channels)
         self.channel_mgr.traceDataChanged.connect(self.update_channels)
         self.channels = channel_mgr.active_channels
+        self.display_types = dict()
         self.channel_plots = list()
         self.timescale_unit = "ps"
         self.timescale = 1
@@ -260,6 +299,8 @@ class WaveformWidget(pg.PlotWidget):
         self.channels = self.channel_mgr.active_channels
         self.timescale = self.channel_mgr.timescale_magnitude
         self.timescale_unit = self.channel_mgr.unit
+        self.display_types = self.channel_mgr.display_types
+        print(self.display_types)
         self.refresh_display()
 
     def display_graph(self):
@@ -273,19 +314,25 @@ class WaveformWidget(pg.PlotWidget):
         for msg_type in channel[1]:
             row = self._display_waveform(channel[0], row, msg_type)
         return row
+    
+    @staticmethod
+    def convert_type(data, display_type):
+        if display_type == DisplayType.INT_64:
+            return data
+        if display_type == DisplayType.FLOAT_64:
+            return struct.unpack('>d', struct.pack('>Q', data))[0]
 
-    def _display_waveform(self, channel, row, msg_type, flags=None):
+    def _display_waveform(self, channel, row, msg_type, display_type=DisplayType.INT_64):
         pen = self.green_pen
         red_pen = self.red_pen
         sub_pen = self.dark_green_pen
         blue_pen = self.blue_pen
         data = self.channel_mgr.data[channel][msg_type]
+        display_type = self.display_types[channel].get(msg_type, DisplayType.INT_64)
         if len(data) == 0:
-            return row + 1
+            return row
         x_data = [x.rtio_counter for x in data]
-        y_data = [struct.unpack('>d', struct.pack('>Q', y.data))[0] for y in data]
-        x_range = self.channel_mgr.x_range[channel][msg_type]
-        y_range = self.channel_mgr.y_range[channel][msg_type]
+        y_data = [self.convert_type(y.data, display_type) for y in data]
 
         if row < len(self.channel_plots):
             self.channel_plots[row].setData(x_data, y_data)
@@ -297,7 +344,6 @@ class WaveformWidget(pg.PlotWidget):
             self.channel_plots.append(pdi)
         return row + 1
 
-# TODO separate out the data
 class ChannelManager(QtCore.QObject):
     activeChannelsChanged = QtCore.pyqtSignal()
     expandedChannelsChanged = QtCore.pyqtSignal()
@@ -306,11 +352,10 @@ class ChannelManager(QtCore.QObject):
     def __init__(self):
         QtCore.QObject.__init__(self) 
         self.data = dict()
-        self.x_range = dict()
-        self.y_range = dict()
         self.active_channels = list()
         self.channels = set()
         self.expanded_channels = set()
+        self.display_types = dict()
         self.start_time = 0
         self.end_time = 100
         self.unit = 'ps'
@@ -495,8 +540,7 @@ class WaveformDock(QtWidgets.QDockWidget):
             channels.add(message.channel)
         self.channel_mgr.channels = channels
         data = dict()
-        x_range = dict()
-        y_range = dict()
+        display_types = dict()
         for channel in channels:
             data[channel] = {
                     0: [],
@@ -504,33 +548,12 @@ class WaveformDock(QtWidgets.QDockWidget):
                     2: [],
                     3: []
             }
-            x_range[channel] = {
-                    0: [float("inf"), -float("inf")],
-                    1: [float("inf"), -float("inf")],
-                    2: [float("inf"), -float("inf")],
-                    3: [float("inf"), -float("inf")]
-            }
-            y_range[channel] = {
-                    0: [float("inf"), -float("inf")],
-                    1: [float("inf"), -float("inf")],
-                    2: [float("inf"), -float("inf")],
-                    3: [float("inf"), -float("inf")]
-            }
+            display_types[channel] = {}
         for message in messages:
             message_type = self._message_type(message)
             channel = message.channel
             data[channel][message_type].append(message)
-            # handle data range min and max 
-            if message.rtio_counter < x_range[channel][message_type][0]:
-                x_range[channel][message_type][0] = message.rtio_counter 
-            if message.rtio_counter > x_range[channel][message_type][1]:
-                x_range[channel][message_type][1] = message.rtio_counter 
-            if message.data < y_range[channel][message_type][0]:
-                y_range[channel][message_type][0] = message.data 
-            if message.data > y_range[channel][message_type][1]:
-                y_range[channel][message_type][1] = message.data 
 
         self.channel_mgr.data = data
-        self.channel_mgr.x_range = x_range
-        self.channel_mgr.y_range = y_range
+        self.channel_mgr.display_types = display_types
         self.channel_mgr.traceDataChanged.emit()
