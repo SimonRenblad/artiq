@@ -19,10 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 class Node:
-    def __init__(self, data):
+    def __init__(self, data, display_name=None):
         self.data = data
         self.parent = None
         self.children = []
+        self.display_name = display_name if display_name else data
 
     def print_node(self):
         print(self.data)
@@ -34,19 +35,30 @@ class Tree:
         self.root = Node(root)
 
     def insert_channel(self, channel):
-        channel_node = Node(channel)
+        channel_node = Node(channel, f"Channel: {channel}")
         channel_node.parent = self.root
         self.root.children.append(channel_node)
 
     def insert_type(self, channel, msg_type):
         for node in self.root.children:
             if node.data == channel:
-                type_node = Node(msg_type)
+                type_node = Node(msg_type, 
+                                 message_type_string(msg_type))
                 type_node.parent = node
                 node.children.append(type_node)
 
     def print_tree(self):
         self.root.print_node()
+
+def message_type_string(type_as_int):
+    if type_as_int == 0:
+        return "OutputMessage"
+    if type_as_int == 1:
+        return "InputMessage"
+    if type_as_int == 2:
+        return "ExceptionMessage"
+    if type_as_int == 3:
+        return "StoppedMessage"
 
 class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
     refreshModel = QtCore.pyqtSignal()
@@ -75,7 +87,7 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
             return "Invalid Index"
         if role == Qt.DisplayRole:
             item = index.internalPointer()  
-            return item.data
+            return item.display_name
 
     def index(self, row, column, parent=QtCore.QModelIndex()):
         if not self.hasIndex(row, column, parent):
@@ -127,68 +139,6 @@ class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
 
     def emitDataChanged(self):
         self.traceDataChanged.emit(QtCore.QModelIndex(), QtCore.QModelIndex())
-    
-    #def mimeTypes(self):
-    #    return ['application/x-qabstractitemmodeldatalist']
-
-    #def mimeData(self, indexes):
-    #    mimedata = QtCore.QMimeData()
-    #    encoded_data = QtCore.QByteArray()
-    #    stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.WriteOnly)
-    #    for index in indexes:
-    #        if index.isValid():
-    #            item = index.internalPointer()
-    #            id = None
-    #            ord = None
-    #            row = index.row()
-    #            if isinstance(item, Bit):
-    #                id = item.channel().id
-    #                ord = item.channel().bits.index(item)
-    #                row = self.channel_mgr.get_row_from_id(id)
-    #            elif isinstance(item, Channel):
-    #                id = item.id
-    #                ord = -1
-    #            stream.writeInt32(id)
-    #            stream.writeInt32(row)
-    #            stream.writeInt32(ord)
-    #    mimedata.setData('application/x-qabstractitemmodeldatalist', encoded_data)
-    #    return mimedata
-
-    #def dropMimeData(self, mimedata, action, row, column, parent):
-    #    if action == Qt.IgnoreAction:
-    #        return True
-    #    if not mimedata.hasFormat('application/x-qabstractitemmodeldatalist'):
-    #        return False
-    #    if column > 0:
-    #        return False
-    #    if not parent.isValid():
-    #        return False
-    #    if row < 0:
-    #        return False
-    #    encoded_data = mimedata.data('application/x-qabstractitemmodeldatalist')
-    #    stream = QtCore.QDataStream(encoded_data, QtCore.QIODevice.ReadOnly)
-    #    source_id = stream.readInt32() 
-    #    print("source_id", source_id)
-    #    source_row = stream.readInt32()
-    #    print("source_row", source_row)
-    #    source_ord = stream.readInt32()
-    #    print("source_ord", source_ord)
-    #    parent_item = parent.internalPointer()
-    #    print("parent_item", parent_item)
-    #    # if pos is -1, full channel move
-    #    if source_ord < 0:
-    #        if isinstance(parent_item, str):
-    #            print("end_row", row)
-    #            self.channel_mgr.move_channel(row, source_row)
-    #        else: 
-    #            return False
-    #    else:
-    #        if isinstance(parent_item, Channel):
-    #            print("end_row", row)
-    #            self.channel_mgr.move_bit(row, source_ord, source_row)
-    #        else:
-    #            return False
-    #    return True
 
 
 class WaveformActiveChannelView(QtWidgets.QTreeView):
@@ -263,15 +213,12 @@ class AddChannelDialog(QtWidgets.QDialog):
         self.close()
 
 
-class WaveformsWidget(QtWidgets.QWidget):
+class WaveformWidget(pg.PlotWidget):
     def __init__(self, parent=None, channel_mgr=None):
-        QtWidgets.QWidget.__init__(self, parent)
+        pg.PlotWidget.__init__(self, parent=parent)
         #self.vbox = QtWidgets.QVBoxLayout()
-        self.grid = QtWidgets.QGridLayout()
-        self.setLayout(self.grid)
-        self.plot_widget = pg.PlotWidget()
-        self.plot_widget.addLegend()
-        self.grid.addWidget(self.plot_widget, 0, 0)
+        self.addLegend()
+        self.showGrid(True, True, 0.5)
         self.channel_mgr = channel_mgr
         self.channel_mgr.activeChannelsChanged.connect(self.update_channels)
         self.channel_mgr.expandedChannelsChanged.connect(self.update_channels)
@@ -333,15 +280,20 @@ class WaveformsWidget(QtWidgets.QWidget):
         sub_pen = self.dark_green_pen
         blue_pen = self.blue_pen
         data = self.channel_mgr.data[channel][msg_type]
+        if len(data) == 0:
+            return row + 1
         x_data = [x.rtio_counter for x in data]
-        y_data = [y.data for y in data]
+        y_data = [struct.unpack('>d', struct.pack('>Q', y.data))[0] for y in data]
         x_range = self.channel_mgr.x_range[channel][msg_type]
         y_range = self.channel_mgr.y_range[channel][msg_type]
 
         if row < len(self.channel_plots):
             self.channel_plots[row].setData(x_data, y_data)
         else:
-            pdi = self.plot_widget.plot(x_data, y_data, name=f"Channel: {channel}, Type: {msg_type}")
+            pdi = self.plot(x_data, 
+                            y_data, 
+                            name=f"Channel: {channel}, Type: {msg_type}",
+                            pen={'color': msg_type, 'width': 1})
             self.channel_plots.append(pdi)
         return row + 1
 
@@ -440,10 +392,8 @@ class WaveformDock(QtWidgets.QDockWidget):
         grid.addWidget(self.end_time_edit_field, 0, 6)
         self.waveform_active_channel_view = WaveformActiveChannelView(channel_mgr=self.channel_mgr)
         grid.addWidget(self.waveform_active_channel_view, 1, 0, colspan=2)
-        self.waveform_widget = WaveformsWidget(channel_mgr=self.channel_mgr) 
-        self.waveform_scroll = QtWidgets.QScrollArea()
-        self.waveform_scroll.setWidget(self.waveform_widget)
-        grid.addWidget(self.waveform_scroll, 1, 2, colspan=10)
+        self.waveform_widget = WaveformWidget(channel_mgr=self.channel_mgr) 
+        grid.addWidget(self.waveform_widget, 1, 2, colspan=10)
         self.load_trace_button.clicked.connect(self._load_trace_clicked)
         self.sync_button.clicked.connect(self._sync_proxy_clicked)
         self.start_time_edit_field.editingFinished.connect(self._change_start_time)
