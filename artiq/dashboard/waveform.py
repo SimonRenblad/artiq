@@ -494,7 +494,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         except:
             logger.error("failed to connect to rtio analyzer. Is artiq_rtio_proxy running?", exc_info=True)
         else:
-            logger.info("ARTIQ dashboard connected to moninj (%s)",
+            logger.info("ARTIQ dashboard connected to rtio analyzer (%s)",
                         self.rtio_addr)
             self._writer.write(b"\x00")
             dump = await self._reader.read()
