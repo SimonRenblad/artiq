@@ -22,7 +22,7 @@ class ProxyConnection:
         if ty == b"\x00": # get dump
             #dump = get_analyzer_dump(self.host, self.port) 
             dump = b"Hello World!\n"
-            with open("dump5.bin", "rb") as f:
+            with open("dump6.bin", "rb") as f:
                 dump = f.read()
             self.writer.write(dump)
             self.writer.write_eof()
