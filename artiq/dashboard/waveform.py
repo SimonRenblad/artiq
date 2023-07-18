@@ -540,6 +540,14 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.start_time_edit_field.editingFinished.connect(self._change_start_time)
         self.end_time_edit_field.editingFinished.connect(self._change_end_time)
 
+    def ccb_notify(self, message):
+        try:
+            service = message["service"]
+            if service == "show_trace":
+                asyncio.ensure_future(self._sync_proxy_task())
+        except:
+            logger.error("failed to process CCB", exc_info=True)
+
     def _change_start_time(self):
         start = int(self.start_time_edit_field.text())
         self.channel_mgr.start_time = start
@@ -586,10 +594,9 @@ class WaveformDock(QtWidgets.QDockWidget):
                         self.rtio_addr)
             self._writer.write(b"\x00")
             dump = await self._reader.read()
-            self._reader.close()
             decoded_dump = decode_dump(dump)
             self.messages = decoded_dump.messages
-            self._parse_messages(messages)
+            self._parse_messages(self.messages)
 
     async def _load_trace_task(self):
         vcd = None
