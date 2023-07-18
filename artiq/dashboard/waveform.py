@@ -406,43 +406,27 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.channel_mgr = ChannelManager()
         grid = LayoutWidget()
         self.setWidget(grid)
-        self.zoom_in_button = QtWidgets.QPushButton()
-        self.zoom_in_button.setIcon(
-                QtWidgets.QApplication.style().standardIcon(
-                    QtWidgets.QStyle.SP_ArrowDown))
-        grid.addWidget(self.zoom_in_button, 0, 0)
-        self.zoom_out_button = QtWidgets.QPushButton()
-        self.zoom_out_button.setIcon(
-                QtWidgets.QApplication.style().standardIcon(
-                    QtWidgets.QStyle.SP_ArrowUp))
-        grid.addWidget(self.zoom_out_button, 0, 1)
         self.load_trace_button = QtWidgets.QPushButton("Load Trace")
         self.load_trace_button.setIcon(
                 QtWidgets.QApplication.style().standardIcon(
                     QtWidgets.QStyle.SP_DialogOpenButton))
-        grid.addWidget(self.load_trace_button, 0, 2)
+        grid.addWidget(self.load_trace_button, 0, 0)
         self.save_trace_button = QtWidgets.QPushButton("Save Trace")
         self.save_trace_button.setIcon(
                 QtWidgets.QApplication.style().standardIcon(
                     QtWidgets.QStyle.SP_DriveFDIcon))
-        grid.addWidget(self.save_trace_button, 0, 3)
+        grid.addWidget(self.save_trace_button, 0, 1)
         self.sync_button = QtWidgets.QPushButton("Sync")
         self.sync_button.setIcon(
                 QtWidgets.QApplication.style().standardIcon(
                     QtWidgets.QStyle.SP_BrowserReload))
-        grid.addWidget(self.sync_button, 0, 4)
-        self.start_time_edit_field = QtWidgets.QLineEdit()
-        grid.addWidget(self.start_time_edit_field, 0, 5)
-        self.end_time_edit_field = QtWidgets.QLineEdit()
-        grid.addWidget(self.end_time_edit_field, 0, 6)
+        grid.addWidget(self.sync_button, 0, 2)
         self.waveform_active_channel_view = WaveformActiveChannelView(channel_mgr=self.channel_mgr)
         grid.addWidget(self.waveform_active_channel_view, 1, 0, colspan=2)
         self.waveform_widget = WaveformWidget(channel_mgr=self.channel_mgr) 
         grid.addWidget(self.waveform_widget, 1, 2, colspan=10)
         self.load_trace_button.clicked.connect(self._load_trace_clicked)
         self.sync_button.clicked.connect(self._sync_proxy_clicked)
-        self.start_time_edit_field.editingFinished.connect(self._change_start_time)
-        self.end_time_edit_field.editingFinished.connect(self._change_end_time)
 
     def ccb_notify(self, message):
         try:
