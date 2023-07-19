@@ -2,6 +2,7 @@ from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtCore import Qt
 
 from sipyco.keepalive import async_open_connection
+from sipyco.sync_struct import Subscriber
 from artiq.gui.tools import LayoutWidget, get_open_file_name
 from artiq.dashboard.vcd_parser import SimpleVCDParser
 from artiq.coredevice.comm_analyzer import decode_dump, InputMessage, OutputMessage, StoppedMessage, ExceptionMessage
@@ -28,13 +29,12 @@ def message_type_string(type_as_int):
     if type_as_int == 3:
         return "StoppedMessage"
 
-class WaveformActiveChannelView(QtWidgets.QListWidget):
+class ActiveChannelList(QtWidgets.QListWidget):
 
     def __init__(self, channel_mgr):
         QtWidgets.QListWidget.__init__(self)
         self.channel_mgr = channel_mgr
         self.active_channels = []
-        self.setIndentation(5)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setDragEnabled(True)
         self.setDropIndicatorShown(True)
@@ -61,14 +61,10 @@ class WaveformActiveChannelView(QtWidgets.QListWidget):
         self.add_channel_dialog = AddChannelDialog(self, channel_mgr=self.channel_mgr)
 
     def set_format(self, ty):
-        index = self.selectionModel().selectedIndexes()[0]
-        item = index.internalPointer()
-        if not item.children:
-            msg_type = item.data
-            channel = item.parent.data
-            self.channel_mgr.display_types[channel][msg_type] = ty
-            self.channel_mgr.expandedChannelsChanged.emit()
-
+        item = self.currentItem()
+        channel = self.channel_mgr.id(item.text())
+        self.channel_mgr.display_types[channel] = ty
+        self.channel_mgr.broadcast_active()
 
     def set_int_format(self):
         self.set_format(DisplayType.INT_64)
@@ -81,7 +77,7 @@ class WaveformActiveChannelView(QtWidgets.QListWidget):
 
     def add_channel(self, channel):
         self.addItem(channel)
-        self.channel_mgr.add_channel(channel)
+        self.channel_mgr.add_channel(self.channel_mgr.id(channel))
 
 
 class AddChannelDialog(QtWidgets.QDialog):
@@ -97,13 +93,18 @@ class AddChannelDialog(QtWidgets.QDialog):
         self.setLayout(grid)
         self.waveform_channel_list = QtWidgets.QListWidget()
         grid.addWidget(self.waveform_channel_list, 0, 0)
-        for channel in self.channel_mgr.channels:
-            self.waveform_channel_list.addItem(channel)
         self.waveform_channel_list.itemDoubleClicked.connect(self.add_channel)
+        self.channel_mgr.traceDataChanged.connect(self.update_channels)
 
     def add_channel(self, channel):
         self.parent.add_channel(channel.text())
         self.close()
+
+    def update_channels(self):
+        self.waveform_channel_list.clear()
+        for channel in self.channel_mgr.channels:
+            self.waveform_channel_list.addItem(self.channel_mgr.name(channel))
+
 
 class DisplayType(Enum):
     INT_64 = 0
@@ -113,13 +114,13 @@ class DisplayType(Enum):
 class WaveformWidget(pg.PlotWidget):
     def __init__(self, parent=None, channel_mgr=None):
         pg.PlotWidget.__init__(self, parent=parent)
-        #self.vbox = QtWidgets.QVBoxLayout()
         self.addLegend()
         self.showGrid(True, True, 0.5)
         self.channel_mgr = channel_mgr
         self.channel_mgr.activeChannelsChanged.connect(self.update_channels)
         self.channel_mgr.traceDataChanged.connect(self.update_channels)
-        self.channels = channel_mgr.active_channels
+        self.active_channels = channel_mgr.active_channels
+        self.channels = channel_mgr.channels
         self.display_types = dict()
         self.plots = dict()
         self.timescale_unit = "ps"
@@ -163,11 +164,12 @@ class WaveformWidget(pg.PlotWidget):
         self.refresh_display()
 
     def display_graph(self):
-        for channel in self.channels:
-            self._display_channel(channel, row)
+        for channel in self.active_channels:
+            self._display_channel(channel)
 
-    def _display_channel(self, channel, row):
-        for msg_type in self.active_msg_type[channel]:
+    def _display_channel(self, channel):
+        # by default display input and output only, unless otherwise specified with actions
+        for msg_type in self.channel_mgr.msg_types.get(channel, [0,1]):
             self._display_waveform(channel, msg_type)
     
     @staticmethod
@@ -183,13 +185,13 @@ class WaveformWidget(pg.PlotWidget):
         sub_pen = self.dark_green_pen
         blue_pen = self.blue_pen
         data = self.channel_mgr.data[channel][msg_type]
-        display_type = self.display_types[channel].get(msg_type, DisplayType.INT_64)
+        display_type = self.display_types.get(channel, DisplayType.INT_64)
         if len(data) == 0:
             return
         x_data = [x.rtio_counter for x in data]
         y_data = [self.convert_type(y.data, display_type) for y in data]
 
-        if channel not in self.plots:
+        if (channel, msg_type) in self.plots.keys():
             self.plots[(channel, msg_type)].setData(x_data, y_data)
         else:
             pdi = self.plot(x_data, 
@@ -207,8 +209,9 @@ class ChannelManager(QtCore.QObject):
         QtCore.QObject.__init__(self) 
         self.data = dict()
         self.active_channels = list()
+        self.channel_names = dict()
+        self.msg_types = dict()
         self.channels = set()
-        self.expanded_channels = set()
         self.display_types = dict()
         self.start_time = 0
         self.end_time = 100
@@ -218,6 +221,15 @@ class ChannelManager(QtCore.QObject):
 
     def broadcast_active(self):
         self.activeChannelsChanged.emit()
+
+    def name(self, channel):
+        return self.channel_names.get(channel, str(channel))
+
+    def id(self, name):
+        for k, v in self.channel_names.items():
+            if v == name:
+                return k
+        return int(name)
 
     def broadcast_data(self):
         self.traceDataChanged.emit()
@@ -262,7 +274,7 @@ class WaveformDock(QtWidgets.QDockWidget):
                 QtWidgets.QApplication.style().standardIcon(
                     QtWidgets.QStyle.SP_BrowserReload))
         grid.addWidget(self.sync_button, 0, 2)
-        self.waveform_active_channel_view = WaveformActiveChannelView(channel_mgr=self.channel_mgr)
+        self.waveform_active_channel_view = ActiveChannelList(channel_mgr=self.channel_mgr)
         grid.addWidget(self.waveform_active_channel_view, 1, 0, colspan=2)
         self.waveform_widget = WaveformWidget(channel_mgr=self.channel_mgr) 
         grid.addWidget(self.waveform_widget, 1, 2, colspan=10)
@@ -276,6 +288,12 @@ class WaveformDock(QtWidgets.QDockWidget):
 
     async def stop(self, server, port):
         await self.subscriber.close()
+        if self._receive_task is not None:
+            self._receive_task.cancel()
+            try:
+                await asyncio.wait_for(self._receive_task, None)
+            except asyncio.CancelledError:
+                pass
 
     def init_ddb(self, ddb):
         self.ddb = ddb
@@ -290,7 +308,7 @@ class WaveformDock(QtWidgets.QDockWidget):
                 elif desc["type"] == "controller" and name == "core_analyzer":
                     self.rtio_addr = desc["host"]
                     self.rtio_port = desc.get("port_proxy", 1382)
-        self.channel_names = channel_names
+        self.channel_mgr.channel_names = channel_names
 
     def ccb_notify(self, message):
         try:
@@ -380,7 +398,6 @@ class WaveformDock(QtWidgets.QDockWidget):
             channels.add(message.channel)
         self.channel_mgr.channels = channels
         data = dict()
-        display_types = dict()
         for channel in channels:
             data[channel] = {
                     0: [],
@@ -388,12 +405,10 @@ class WaveformDock(QtWidgets.QDockWidget):
                     2: [],
                     3: []
             }
-            display_types[channel] = {}
         for message in messages:
             message_type = self._message_type(message)
             channel = message.channel
             data[channel][message_type].append(message)
 
         self.channel_mgr.data = data
-        self.channel_mgr.display_types = display_types
         self.channel_mgr.traceDataChanged.emit()
