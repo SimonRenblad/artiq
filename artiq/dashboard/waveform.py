@@ -428,6 +428,29 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.load_trace_button.clicked.connect(self._load_trace_clicked)
         self.sync_button.clicked.connect(self._sync_proxy_clicked)
 
+        self.subscriber = Subscriber("devices", self.init_ddb, self.update_ddb)
+
+    async def start(self, server, port):
+        await self.subscriber.connect(server, port)
+
+    async def stop(self, server, port):
+        await self.subscriber.close()
+
+    def init_ddb(self, ddb):
+        self.ddb = ddb
+
+    def update_ddb(self, mod):
+        channel_names = dict()
+        for name, desc in self.ddb.items():
+            if isinstance(desc, dict) and desc["type"] == "local":
+                if "arguments" in desc and "channel" in desc["arguments"]:
+                    channel = desc["arguments"]["channel"]
+                    channel_names[channel] = name
+                elif desc["type"] == "controller" and name == "core_analyzer":
+                    self.rtio_addr = desc["host"]
+                    self.rtio_port = desc.get("port_proxy", 1382)
+        self.channel_names = channel_names
+
     def ccb_notify(self, message):
         try:
             service = message["service"]
@@ -436,16 +459,6 @@ class WaveformDock(QtWidgets.QDockWidget):
         except:
             logger.error("failed to process CCB", exc_info=True)
 
-    def _change_start_time(self):
-        start = int(self.start_time_edit_field.text())
-        self.channel_mgr.start_time = start
-        self.channel_mgr.broadcast_active()
-
-    def _change_end_time(self):
-        end = int(self.end_time_edit_field.text())
-        self.channel_mgr.start_time = start
-        self.channel_mgr.broadcast_active()
-
     def _load_trace_clicked(self):
         asyncio.ensure_future(self._load_trace_task())
 
@@ -453,8 +466,8 @@ class WaveformDock(QtWidgets.QDockWidget):
         asyncio.ensure_future(self._sync_proxy_task())
 
     async def _sync_proxy_task(self):
-        # temp assumed variables -> set up subscriber and get the host + proxy port
-        self.rtio_addr = "localhost"
+        # temp assumed variables
+        self.rtio_addr = "::1" # true loop back address
         self.rtio_port = 1382 # proxy for rtio
         try:
             self._reader, self._writer = await async_open_connection(
@@ -467,7 +480,7 @@ class WaveformDock(QtWidgets.QDockWidget):
 
             try:
                 self._writer.write(b"ARTIQ rtio analyzer\n")
-                # self._receive_task = asyncio.ensure_future(self._receive_cr())
+                self._receive_task = asyncio.ensure_future(self._receive_cr())
             except:
                 self._writer.close()
                 del self._reader
@@ -480,11 +493,13 @@ class WaveformDock(QtWidgets.QDockWidget):
         else:
             logger.info("ARTIQ dashboard connected to rtio analyzer (%s)",
                         self.rtio_addr)
-            self._writer.write(b"\x00")
-            dump = await self._reader.read()
-            decoded_dump = decode_dump(dump)
-            self.messages = decoded_dump.messages
-            self._parse_messages(self.messages)
+            self._writer.write(b"\x00") ## make separate coroutine
+
+    async def _receive_cr(self):
+        dump = await self._reader.read()
+        decoded_dump = decode_dump(dump)
+        self.messages = decoded_dump.messages
+        self._parse_messages(self.messages)
 
     async def _load_trace_task(self):
         vcd = None
@@ -503,7 +518,7 @@ class WaveformDock(QtWidgets.QDockWidget):
             decoded_dump = decode_dump(dump)
             self._parse_messages(decoded_dump.messages)
         except:
-            logger.error("Failed to parse VCD file",
+            logger.error("Failed to parse binary trace file",
                          exc_info=True)
 
     def _message_type(self, typ):
