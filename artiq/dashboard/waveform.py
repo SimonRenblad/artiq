@@ -35,30 +35,44 @@ class ActiveChannelList(QtWidgets.QListWidget):
         QtWidgets.QListWidget.__init__(self)
         self.channel_mgr = channel_mgr
         self.active_channels = []
+        
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setDragEnabled(True)
         self.setDropIndicatorShown(True)
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
+        
         add_channel = QtWidgets.QAction("Add channel", self)
         add_channel.triggered.connect(self.add_channel_widget)
         add_channel.setShortcut("CTRL+N")
         add_channel.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel)
 
-        self.data_format_menu = QtWidgets.QMenu("Data Format")
-        self.int_format = QtWidgets.QAction("Int")
-        self.float_format = QtWidgets.QAction("Float")
-        self.data_format_menu.addAction(self.int_format)
-        self.data_format_menu.addAction(self.float_format)
+        # Data format
+        data_format_menu = QtWidgets.QMenu("Data Format", self)
+        int_format = QtWidgets.QAction("Int", self)
+        float_format = QtWidgets.QAction("Float", self)
+        data_format_menu.addAction(int_format)
+        data_format_menu.addAction(float_format)
+        data_format_action = QtWidgets.QAction("Data Format", self)
+        data_format_action.setMenu(data_format_menu)
+        self.addAction(data_format_action)
+        int_format.triggered.connect(self.set_int_format)
+        float_format.triggered.connect(self.set_float_format)
 
-        self.data_format_action = QtWidgets.QAction("Data Format")
-        self.data_format_action.setMenu(self.data_format_menu)
-        self.addAction(self.data_format_action)
-
-        self.int_format.triggered.connect(self.set_int_format)
-        self.float_format.triggered.connect(self.set_float_format)
+        # Message type to display
+        message_type_action = QtWidgets.QAction("Filter message types...", self)
+        self.addAction(message_type_action)
+        message_type_action.triggered.connect(self.display_message_type_filter)
 
         self.add_channel_dialog = AddChannelDialog(self, channel_mgr=self.channel_mgr)
+
+    def display_message_type_filter(self):
+        item = self.currentItem()
+        channel = self.channel_mgr.id(item.text())
+        dialog = MessageTypeFilterDialog(self, 
+                                         channel_mgr=self.channel_mgr,
+                                         channel=channel)
+        dialog.open()
 
     def set_format(self, ty):
         item = self.currentItem()
@@ -79,6 +93,39 @@ class ActiveChannelList(QtWidgets.QListWidget):
         self.addItem(channel)
         self.channel_mgr.add_channel(self.channel_mgr.id(channel))
 
+class MessageTypeFilterDialog(QtWidgets.QDialog):
+    def __init__(self, parent, channel_mgr=None, channel=None):
+        QtWidgets.QDialog.__init__(self, parent=parent)
+        self.setWindowTitle("Filter message types")
+        self.cmgr = channel_mgr
+        self.channel = channel
+        layout = QtWidgets.QVBoxLayout()
+        self.b0 = QtWidgets.QCheckBox("OutputMessage") 
+        self.b1 = QtWidgets.QCheckBox("InputMessage") 
+        self.b2 = QtWidgets.QCheckBox("StoppedMessage") 
+        self.b3 = QtWidgets.QCheckBox("ExceptionMessage") 
+        self.confirm = QtWidgets.QPushButton("Confirm")
+        layout.addWidget(self.b0)
+        layout.addWidget(self.b1)
+        layout.addWidget(self.b2)
+        layout.addWidget(self.b3)
+        layout.addWidget(self.confirm)
+        self.confirm.clicked.connect(self.confirm_filter)
+        self.setLayout(layout)
+    
+    def confirm_filter(self):
+        self.cmgr.msg_types[self.channel] = list()
+        if self.b0.isChecked():
+            self.cmgr.msg_types[self.channel].append(0)
+        if self.b1.isChecked():
+            self.cmgr.msg_types[self.channel].append(1)
+        if self.b2.isChecked():
+            self.cmgr.msg_types[self.channel].append(2)
+        if self.b3.isChecked():
+            self.cmgr.msg_types[self.channel].append(3)
+        print(self.cmgr.msg_types)
+        self.cmgr.broadcast_active()
+        self.close()
 
 class AddChannelDialog(QtWidgets.QDialog):
 
@@ -110,43 +157,16 @@ class DisplayType(Enum):
     INT_64 = 0
     FLOAT_64 = 1
 
-
 class WaveformWidget(pg.PlotWidget):
     def __init__(self, parent=None, channel_mgr=None):
         pg.PlotWidget.__init__(self, parent=parent)
         self.addLegend()
         self.showGrid(True, True, 0.5)
-        self.channel_mgr = channel_mgr
-        self.channel_mgr.activeChannelsChanged.connect(self.update_channels)
-        self.channel_mgr.traceDataChanged.connect(self.update_channels)
-        self.active_channels = channel_mgr.active_channels
-        self.channels = channel_mgr.channels
-        self.display_types = dict()
+        self.cmgr = channel_mgr
+        self.cmgr.activeChannelsChanged.connect(self.update_channels)
+        self.cmgr.traceDataChanged.connect(self.update_channels)
         self.plots = dict()
-        self.timescale_unit = "ps"
-        self.timescale = 1
         self.left_mouse_pressed = False
-        self.blue_pen = QtGui.QPen()
-        self.blue_pen.setStyle(Qt.SolidLine)
-        self.blue_pen.setWidth(1)
-        self.blue_pen.setBrush(Qt.blue)
-        self.font = QtGui.QFont("Monospace", pointSize=7)
-        self.green_pen = QtGui.QPen()
-        self.green_pen.setStyle(Qt.SolidLine)
-        self.green_pen.setWidth(1)
-        self.green_pen.setBrush(Qt.green)
-        self.red_pen = QtGui.QPen()
-        self.red_pen.setStyle(Qt.SolidLine)
-        self.red_pen.setWidth(1)
-        self.red_pen.setBrush(Qt.red)
-        self.dark_green_pen = QtGui.QPen()
-        self.dark_green_pen.setStyle(Qt.SolidLine)
-        self.dark_green_pen.setWidth(1)
-        self.dark_green_pen.setBrush(Qt.darkGreen)
-        self.yellow_pen = QtGui.QPen()
-        self.yellow_pen.setStyle(Qt.SolidLine)
-        self.yellow_pen.setWidth(1)
-        self.yellow_pen.setBrush(Qt.yellow)
         self.refresh_display()
 
     def refresh_display(self):
@@ -155,21 +175,18 @@ class WaveformWidget(pg.PlotWidget):
 
     def update_channels(self):
         print("update_channels")
-        self.active_channels = self.channel_mgr.active_channels
-        self.channels = self.channel_mgr.channels
-        self.timescale = self.channel_mgr.timescale_magnitude
-        self.timescale_unit = self.channel_mgr.unit
-        self.display_types = self.channel_mgr.display_types
-        print(self.display_types)
         self.refresh_display()
 
     def display_graph(self):
-        for channel in self.active_channels:
+        # redraw with each update - not expecting frequent updates
+        for plot in self.plots.values():
+            self.removeItem(plot)
+        self.plots = dict()
+        for channel in self.cmgr.active_channels:
             self._display_channel(channel)
 
     def _display_channel(self, channel):
-        # by default display input and output only, unless otherwise specified with actions
-        for msg_type in self.channel_mgr.msg_types.get(channel, [0,1]):
+        for msg_type in self.cmgr.msg_types.get(channel, [0,1]):
             self._display_waveform(channel, msg_type)
     
     @staticmethod
@@ -180,25 +197,18 @@ class WaveformWidget(pg.PlotWidget):
             return struct.unpack('>d', struct.pack('>Q', data))[0]
 
     def _display_waveform(self, channel, msg_type):
-        pen = self.green_pen
-        red_pen = self.red_pen
-        sub_pen = self.dark_green_pen
-        blue_pen = self.blue_pen
-        data = self.channel_mgr.data[channel][msg_type]
-        display_type = self.display_types.get(channel, DisplayType.INT_64)
+        data = self.cmgr.data[channel][msg_type]
+        display_type = self.cmgr.display_types.get(channel, DisplayType.INT_64)
         if len(data) == 0:
             return
         x_data = [x.rtio_counter for x in data]
         y_data = [self.convert_type(y.data, display_type) for y in data]
 
-        if (channel, msg_type) in self.plots.keys():
-            self.plots[(channel, msg_type)].setData(x_data, y_data)
-        else:
-            pdi = self.plot(x_data, 
-                            y_data, 
-                            name=f"Channel: {channel}, Type: {msg_type}",
-                            pen={'color': msg_type, 'width': 1})
-            self.plots[(channel, msg_type)] = pdi
+        pdi = self.plot(x_data, 
+                        y_data, 
+                        name=f"Channel: {channel}, Type: {msg_type}",
+                        pen={'color': msg_type, 'width': 1})
+        self.plots[(channel, msg_type)] = pdi
         return
 
 class ChannelManager(QtCore.QObject):
@@ -282,11 +292,12 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.sync_button.clicked.connect(self._sync_proxy_clicked)
 
         self.subscriber = Subscriber("devices", self.init_ddb, self.update_ddb)
+        self._receive_task = None
 
     async def start(self, server, port):
         await self.subscriber.connect(server, port)
 
-    async def stop(self, server, port):
+    async def stop(self):
         await self.subscriber.close()
         if self._receive_task is not None:
             self._receive_task.cancel()
