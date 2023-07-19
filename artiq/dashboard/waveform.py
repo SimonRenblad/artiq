@@ -197,18 +197,25 @@ class WaveformWidget(pg.PlotWidget):
             return struct.unpack('>d', struct.pack('>Q', data))[0]
 
     def _display_waveform(self, channel, msg_type):
-        data = self.cmgr.data[channel][msg_type]
         display_type = self.cmgr.display_types.get(channel, DisplayType.INT_64)
+        data = self.cmgr.data[channel][msg_type]
         if len(data) == 0:
             return
         x_data = [x.rtio_counter for x in data]
-        y_data = [self.convert_type(y.data, display_type) for y in data]
+        if msg_type < 2:
+            y_data = [self.convert_type(y.data, display_type) for y in data]
 
-        pdi = self.plot(x_data, 
-                        y_data, 
-                        name=f"Channel: {channel}, Type: {msg_type}",
-                        pen={'color': msg_type, 'width': 1})
-        self.plots[(channel, msg_type)] = pdi
+            pdi = self.plot(x_data, 
+                            y_data, 
+                            name=f"Channel: {channel}, {message_type_string(msg_type)}",
+                            pen={'color': msg_type, 'width': 1})
+            self.plots[(channel, msg_type)] = pdi
+        else:
+            pdi = self.plot(x_data, 
+                            symbol='x',
+                            name=f"Channel: {channel}, {message_type_string(msg_type)}",
+                            pen={'color': msg_type, 'width': 1})
+            self.plots[(channel, msg_type)] = pdi
         return
 
 class ChannelManager(QtCore.QObject):
@@ -405,6 +412,8 @@ class WaveformDock(QtWidgets.QDockWidget):
     def _parse_messages(self, messages):
         channels = set()
         for message in messages:
+            if self._message_type(message) == 3:
+                break
             message_type = self._message_type(message)
             channels.add(message.channel)
         self.channel_mgr.channels = channels
@@ -418,6 +427,8 @@ class WaveformDock(QtWidgets.QDockWidget):
             }
         for message in messages:
             message_type = self._message_type(message)
+            if message_type == 3:
+                break
             channel = message.channel
             data[channel][message_type].append(message)
 
