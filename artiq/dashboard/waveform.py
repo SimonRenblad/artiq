@@ -18,39 +18,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
-class Node:
-    def __init__(self, data, display_name=None):
-        self.data = data
-        self.parent = None
-        self.children = []
-        self.display_name = display_name if display_name else data
-
-    def print_node(self):
-        print(self.data)
-        for c in self.children:
-            c.print_node()
-
-class Tree:
-    def __init__(self, root):
-        self.root = Node(root)
-
-    def insert_channel(self, channel):
-        channel_node = Node(channel, f"Channel: {channel}")
-        channel_node.parent = self.root
-        self.root.children.append(channel_node)
-
-    def insert_type(self, channel, msg_type):
-        for node in self.root.children:
-            if node.data == channel:
-                type_node = Node(msg_type, 
-                                 message_type_string(msg_type))
-                type_node.parent = node
-                node.children.append(type_node)
-
-    def print_tree(self):
-        self.root.print_node()
-
 def message_type_string(type_as_int):
     if type_as_int == 0:
         return "OutputMessage"
@@ -61,103 +28,16 @@ def message_type_string(type_as_int):
     if type_as_int == 3:
         return "StoppedMessage"
 
-class WaveformActiveChannelModel(QtCore.QAbstractItemModel):
-    refreshModel = QtCore.pyqtSignal()
-
-    def __init__(self, parent=None, channel_mgr=None):
-        super().__init__(parent)
-        self.channel_mgr = channel_mgr
-        self.active_channels = self.channel_mgr.active_channels
-        self.channel_mgr.activeChannelsChanged.connect(self.update_active_channels)
-        self.beginResetModel()
-        self._tree = Tree("Channels")
-        for act_channel in self.active_channels:
-            self._tree.insert_channel(act_channel[0])
-            for typ in act_channel[1]:
-                self._tree.insert_type(act_channel[0], typ)
-        self.endResetModel()
-
-    def flags(self, index):
-        flags = QtCore.QAbstractItemModel.flags(self, index)
-        if index.isValid():
-            flags |= Qt.ItemIsEnabled | Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled | Qt.ItemIsSelectable
-        return flags
-
-    def data(self, index, role):
-        if not index.isValid():
-            return "Invalid Index"
-        if role == Qt.DisplayRole:
-            item = index.internalPointer()  
-            return item.display_name
-
-    def index(self, row, column, parent=QtCore.QModelIndex()):
-        if not self.hasIndex(row, column, parent):
-            return QtCore.QModelIndex()
-        if not parent.isValid():
-            return self.createIndex(0, 0, self._tree.root)
-        parent_item = parent.internalPointer()
-        return self.createIndex(row, column, parent_item.children[row])
-
-    def parent(self, index):
-        if not index.isValid():
-            return QtCore.QModelIndex()
-        item = index.internalPointer()
-        if item.parent is None:
-            return QtCore.QModelIndex()
-        parent_item = item.parent
-        if parent_item.parent is None:
-            return self.createIndex(0, 0, self._tree.root)
-        row = parent_item.parent.children.index(parent_item)
-        return self.createIndex(row, 0, parent_item)
-
-    def headerData(self, section, orientation, role):
-        return ["Channels"]
-
-    def rowCount(self, index=QtCore.QModelIndex()):
-        if not index.isValid():
-            return 1
-        item = index.internalPointer()
-        return len(item.children)
-
-    def columnCount(self, parent=QtCore.QModelIndex()):
-        return 1
-
-    def supportedDragActions(self):
-        return Qt.MoveAction
-
-    def supportedDropActions(self):
-        return Qt.MoveAction
-    
-    def update_active_channels(self):
-        self.beginResetModel()
-        self.active_channels = self.channel_mgr.active_channels
-        self._tree = Tree("Channels")
-        for act_channel in self.active_channels:
-            self._tree.insert_channel(act_channel[0])
-            for typ in act_channel[1]:
-                self._tree.insert_type(act_channel[0], typ)
-        self.endResetModel()
-
-    def emitDataChanged(self):
-        self.traceDataChanged.emit(QtCore.QModelIndex(), QtCore.QModelIndex())
-
-
-class WaveformActiveChannelView(QtWidgets.QTreeView):
+class WaveformActiveChannelView(QtWidgets.QListWidget):
 
     def __init__(self, channel_mgr):
-        QtWidgets.QTreeView.__init__(self)
+        QtWidgets.QListWidget.__init__(self)
         self.channel_mgr = channel_mgr
         self.active_channels = []
         self.setIndentation(5)
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setDragEnabled(True)
         self.setDropIndicatorShown(True)
-        #self.setItemsExpandable(False)
-        #self.setRootIsDecorated(False)
-        self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
-        self.model = WaveformActiveChannelModel(channel_mgr=self.channel_mgr)
-        self.setModel(self.model)
-        self.model.modelReset.connect(lambda x: self.expandAll())
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
         add_channel = QtWidgets.QAction("Add channel", self)
         add_channel.triggered.connect(self.add_channel_widget)
@@ -179,7 +59,6 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
         self.float_format.triggered.connect(self.set_float_format)
 
         self.add_channel_dialog = AddChannelDialog(self, channel_mgr=self.channel_mgr)
-        self.channel_mgr.activeChannelsChanged.connect(self.update_active_channels)
 
     def set_format(self, ty):
         index = self.selectionModel().selectedIndexes()[0]
@@ -200,30 +79,9 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
     def add_channel_widget(self):
         self.add_channel_dialog.open()
 
-    def update_active_channels(self):
-        self.active_channels = self.channel_mgr.active_channels
-
-
-class WaveformChannelList(QtWidgets.QListWidget):
-    add_channel_signal = QtCore.pyqtSignal()
-
-    def __init__(self, channel_mgr=None):
-        QtWidgets.QListWidget.__init__(self)
-        self.channel_mgr = channel_mgr
-        for channel in self.channel_mgr.channels:
-            self.addItem(str(channel))
-        self.itemDoubleClicked.connect(self.emit_add_channel)
-        self.channel_mgr.traceDataChanged.connect(self.update_channels)
-
-    def emit_add_channel(self, item):
-        s = item.text()
-        self.channel_mgr.add_channel(int(s))
-        self.add_channel_signal.emit()
-
-    def update_channels(self):
-        self.clear()
-        for channel in self.channel_mgr.channels:
-            self.addItem(str(channel))
+    def add_channel(self, channel):
+        self.addItem(channel)
+        self.channel_mgr.add_channel(channel)
 
 
 class AddChannelDialog(QtWidgets.QDialog):
@@ -232,15 +90,19 @@ class AddChannelDialog(QtWidgets.QDialog):
         QtWidgets.QDialog.__init__(self, parent=parent)
         self.setWindowTitle("Add channel")   
         self.channel_mgr = channel_mgr
+        self.parent = parent
         grid = QtWidgets.QGridLayout()
         grid.setRowMinimumHeight(1, 40)
         grid.setColumnMinimumWidth(2, 60)
         self.setLayout(grid)
-        self.waveform_channel_list = WaveformChannelList(self.channel_mgr)
+        self.waveform_channel_list = QtWidgets.QListWidget()
         grid.addWidget(self.waveform_channel_list, 0, 0)
-        self.waveform_channel_list.add_channel_signal.connect(self.add_channel)
+        for channel in self.channel_mgr.channels:
+            self.waveform_channel_list.addItem(channel)
+        self.waveform_channel_list.itemDoubleClicked.connect(self.add_channel)
 
-    def add_channel(self):
+    def add_channel(self, channel):
+        self.parent.add_channel(channel.text())
         self.close()
 
 class DisplayType(Enum):
@@ -256,11 +118,10 @@ class WaveformWidget(pg.PlotWidget):
         self.showGrid(True, True, 0.5)
         self.channel_mgr = channel_mgr
         self.channel_mgr.activeChannelsChanged.connect(self.update_channels)
-        self.channel_mgr.expandedChannelsChanged.connect(self.update_channels)
         self.channel_mgr.traceDataChanged.connect(self.update_channels)
         self.channels = channel_mgr.active_channels
         self.display_types = dict()
-        self.channel_plots = list()
+        self.plots = dict()
         self.timescale_unit = "ps"
         self.timescale = 1
         self.left_mouse_pressed = False
@@ -293,7 +154,8 @@ class WaveformWidget(pg.PlotWidget):
 
     def update_channels(self):
         print("update_channels")
-        self.channels = self.channel_mgr.active_channels
+        self.active_channels = self.channel_mgr.active_channels
+        self.channels = self.channel_mgr.channels
         self.timescale = self.channel_mgr.timescale_magnitude
         self.timescale_unit = self.channel_mgr.unit
         self.display_types = self.channel_mgr.display_types
@@ -301,16 +163,12 @@ class WaveformWidget(pg.PlotWidget):
         self.refresh_display()
 
     def display_graph(self):
-        print("graph")
-        row = 0
-        print(self.channels)
         for channel in self.channels:
-            row = self._display_channel(channel, row)
+            self._display_channel(channel, row)
 
     def _display_channel(self, channel, row):
-        for msg_type in channel[1]:
-            row = self._display_waveform(channel[0], row, msg_type)
-        return row
+        for msg_type in self.active_msg_type[channel]:
+            self._display_waveform(channel, msg_type)
     
     @staticmethod
     def convert_type(data, display_type):
@@ -319,7 +177,7 @@ class WaveformWidget(pg.PlotWidget):
         if display_type == DisplayType.FLOAT_64:
             return struct.unpack('>d', struct.pack('>Q', data))[0]
 
-    def _display_waveform(self, channel, row, msg_type, display_type=DisplayType.INT_64):
+    def _display_waveform(self, channel, msg_type):
         pen = self.green_pen
         red_pen = self.red_pen
         sub_pen = self.dark_green_pen
@@ -327,23 +185,22 @@ class WaveformWidget(pg.PlotWidget):
         data = self.channel_mgr.data[channel][msg_type]
         display_type = self.display_types[channel].get(msg_type, DisplayType.INT_64)
         if len(data) == 0:
-            return row
+            return
         x_data = [x.rtio_counter for x in data]
         y_data = [self.convert_type(y.data, display_type) for y in data]
 
-        if row < len(self.channel_plots):
-            self.channel_plots[row].setData(x_data, y_data)
+        if channel not in self.plots:
+            self.plots[(channel, msg_type)].setData(x_data, y_data)
         else:
             pdi = self.plot(x_data, 
                             y_data, 
                             name=f"Channel: {channel}, Type: {msg_type}",
                             pen={'color': msg_type, 'width': 1})
-            self.channel_plots.append(pdi)
-        return row + 1
+            self.plots[(channel, msg_type)] = pdi
+        return
 
 class ChannelManager(QtCore.QObject):
     activeChannelsChanged = QtCore.pyqtSignal()
-    expandedChannelsChanged = QtCore.pyqtSignal()
     traceDataChanged = QtCore.pyqtSignal()
 
     def __init__(self):
@@ -359,17 +216,6 @@ class ChannelManager(QtCore.QObject):
         self.timescale = 1
         self.timescale_magnitude = 1
 
-    def _expanded_emit(self):
-        self.expandedChannelsChanged.emit()
-
-    def move_channel(self, dest, source):
-        channel = self.active_channels[source]
-        if source > dest:
-            source += 1
-        self.active_channels.insert(dest, channel)
-        self.active_channels.pop(source)
-        self.broadcast_active()
-
     def broadcast_active(self):
         self.activeChannelsChanged.emit()
 
@@ -377,14 +223,12 @@ class ChannelManager(QtCore.QObject):
         self.traceDataChanged.emit()
 
     def add_channel(self, channel):
-        self.active_channels.append([channel, [0,1,2,3]])
+        self.active_channels.append(channel)
         self.broadcast_active()
-        return channel
 
     def remove_channel(self, id):
         self.active_channels.remove(channel)
         self.broadcast_active()
-        return 
 
     def get_active_channels(self):
         return self.active_channels
