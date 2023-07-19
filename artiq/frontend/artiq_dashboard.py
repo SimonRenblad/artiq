@@ -203,6 +203,8 @@ def main():
     broadcast_clients["ccb"].notify_cbs.append(d_applets.ccb_notify)
 
     d_waveform = waveform.WaveformDock()
+    loop.run_until_complete(d_waveform.start(args.server, args.port_notify))
+    atexit_register_coroutine(d_waveform.stop, loop=loop)
     broadcast_clients["ccb"].notify_cbs.append(d_waveform.ccb_notify)
 
     d_ttl_dds = moninj.MonInj(rpc_clients["schedule"])
