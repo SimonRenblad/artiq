@@ -197,9 +197,6 @@ class WaveformActiveChannelView(QtWidgets.QTreeView):
     def set_float_format(self):
         self.set_format(DisplayType.FLOAT_64)
 
-    def setSelectionAfterMove(self, index):
-        self.selectionModel().select(index, QtCore.QItemSelectionModel.ClearAndSelect)
-
     def add_channel_widget(self):
         self.add_channel_dialog.open()
 
