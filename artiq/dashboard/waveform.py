@@ -40,12 +40,18 @@ class ActiveChannelList(QtWidgets.QListWidget):
         self.setDragEnabled(True)
         self.setDropIndicatorShown(True)
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
-        
-        add_channel = QtWidgets.QAction("Add channel", self)
+       
+        # Add channel
+        add_channel = QtWidgets.QAction("Add channel...", self)
         add_channel.triggered.connect(self.add_channel_widget)
         add_channel.setShortcut("CTRL+N")
         add_channel.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel)
+
+        # Remove channel
+        remove_channel = QtWidgets.QAction("Delete", self)
+        remove_channel.triggered.connect(self.remove_channel)
+        self.addAction(remove_channel)
 
         # Data format
         data_format_menu = QtWidgets.QMenu("Data Format", self)
@@ -65,6 +71,13 @@ class ActiveChannelList(QtWidgets.QListWidget):
         message_type_action.triggered.connect(self.display_message_type_filter)
 
         self.add_channel_dialog = AddChannelDialog(self, channel_mgr=self.channel_mgr)
+
+    def remove_channel(self):
+        item = self.currentItem()
+        channel = self.channel_mgr.id(item.text())
+        self.takeItem(self.row(item))
+        self.channel_mgr.active_channels.remove(channel)
+        self.channel_mgr.broadcast_active()
 
     def display_message_type_filter(self):
         item = self.currentItem()
@@ -102,13 +115,18 @@ class MessageTypeFilterDialog(QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout()
         self.b0 = QtWidgets.QCheckBox("OutputMessage") 
         self.b1 = QtWidgets.QCheckBox("InputMessage") 
-        self.b2 = QtWidgets.QCheckBox("StoppedMessage") 
-        self.b3 = QtWidgets.QCheckBox("ExceptionMessage") 
+        self.b2 = QtWidgets.QCheckBox("ExceptionMessage")
+        msg_types = self.cmgr.msg_types.get(self.channel, [0,1])
+        if 0 in msg_types:
+            self.b0.setChecked(True)
+        if 1 in msg_types:
+            self.b1.setChecked(True)
+        if 2 in msg_types:
+            self.b2.setChecked(True)
         self.confirm = QtWidgets.QPushButton("Confirm")
         layout.addWidget(self.b0)
         layout.addWidget(self.b1)
         layout.addWidget(self.b2)
-        layout.addWidget(self.b3)
         layout.addWidget(self.confirm)
         self.confirm.clicked.connect(self.confirm_filter)
         self.setLayout(layout)
@@ -121,9 +139,6 @@ class MessageTypeFilterDialog(QtWidgets.QDialog):
             self.cmgr.msg_types[self.channel].append(1)
         if self.b2.isChecked():
             self.cmgr.msg_types[self.channel].append(2)
-        if self.b3.isChecked():
-            self.cmgr.msg_types[self.channel].append(3)
-        print(self.cmgr.msg_types)
         self.cmgr.broadcast_active()
         self.close()
 
@@ -162,6 +177,7 @@ class WaveformWidget(pg.PlotWidget):
         pg.PlotWidget.__init__(self, parent=parent)
         self.addLegend()
         self.showGrid(True, True, 0.5)
+        self.setLabel('bottom', text='time', units='s')
         self.cmgr = channel_mgr
         self.cmgr.activeChannelsChanged.connect(self.update_channels)
         self.cmgr.traceDataChanged.connect(self.update_channels)
@@ -170,11 +186,9 @@ class WaveformWidget(pg.PlotWidget):
         self.refresh_display()
 
     def refresh_display(self):
-        print("refresh_display")
         self.display_graph()
 
     def update_channels(self):
-        print("update_channels")
         self.refresh_display()
 
     def display_graph(self):
