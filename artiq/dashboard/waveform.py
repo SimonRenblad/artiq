@@ -284,6 +284,7 @@ class ChannelManager(QtCore.QObject):
 class WaveformDock(QtWidgets.QDockWidget):
     def __init__(self):
         QtWidgets.QDockWidget.__init__(self, "Waveform")
+        self.dump = None
         self.setObjectName("Waveform")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
                          QtWidgets.QDockWidget.DockWidgetFloatable)
@@ -310,49 +311,45 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.waveform_widget = WaveformWidget(channel_mgr=self.channel_mgr) 
         grid.addWidget(self.waveform_widget, 1, 2, colspan=10)
         self.load_trace_button.clicked.connect(self._load_trace_clicked)
+        self.save_trace_button.clicked.connect(self._save_trace_clicked)
         self.sync_button.clicked.connect(self._sync_proxy_clicked)
 
         self.subscriber = Subscriber("devices", self.init_ddb, self.update_ddb)
         self._receive_task = None
 
-    async def start(self, server, port):
-        await self.subscriber.connect(server, port)
-
-    async def stop(self):
-        await self.subscriber.close()
-        if self._receive_task is not None:
-            self._receive_task.cancel()
-            try:
-                await asyncio.wait_for(self._receive_task, None)
-            except asyncio.CancelledError:
-                pass
-
-    def init_ddb(self, ddb):
-        self.ddb = ddb
-
-    def update_ddb(self, mod):
-        channel_names = dict()
-        for name, desc in self.ddb.items():
-            if isinstance(desc, dict) and desc["type"] == "local":
-                if "arguments" in desc and "channel" in desc["arguments"]:
-                    channel = desc["arguments"]["channel"]
-                    channel_names[channel] = name
-                elif desc["type"] == "controller" and name == "core_analyzer":
-                    self.rtio_addr = desc["host"]
-                    self.rtio_port = desc.get("port_proxy", 1382)
-        self.channel_mgr.channel_names = channel_names
-
-    def ccb_notify(self, message):
-        try:
-            service = message["service"]
-            if service == "show_trace":
-                asyncio.ensure_future(self._sync_proxy_task())
-        except:
-            logger.error("failed to process CCB", exc_info=True)
-
+    # load from binary file
     def _load_trace_clicked(self):
         asyncio.ensure_future(self._load_trace_task())
 
+    async def _load_trace_task(self):
+        try:
+            filename = await get_open_file_name(
+                    self,
+                    "Load Raw Dump",
+                    "c://",
+                    "All files (*.*)")
+        except asyncio.CancelledError:
+            return
+        try:
+            with open(filename, 'rb') as f:
+                dump = f.read()
+            self.dump = dump
+            decoded_dump = decode_dump(dump)
+            self._parse_messages(decoded_dump.messages)
+        except:
+            logger.error("Failed to parse binary trace file",
+                         exc_info=True)
+
+    # save to binary file
+    def _save_trace_clicked(self):
+        asyncio.ensure_future(self._save_trace_task())
+
+    async def _save_trace_task(self):
+        if dump is not None:
+            pass
+
+
+    # sync with proxy
     def _sync_proxy_clicked(self):
         asyncio.ensure_future(self._sync_proxy_task())
 
@@ -392,26 +389,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.messages = decoded_dump.messages
         self._parse_messages(self.messages)
 
-    async def _load_trace_task(self):
-        vcd = None
-        try:
-            filename = await get_open_file_name(
-                    self,
-                    "Load Raw Dump",
-                    "c://",
-                    "All files (*.*)")
-        except asyncio.CancelledError:
-            return
-        try:
-            with open(filename, 'rb') as f:
-                dump = f.read()
-
-            decoded_dump = decode_dump(dump)
-            self._parse_messages(decoded_dump.messages)
-        except:
-            logger.error("Failed to parse binary trace file",
-                         exc_info=True)
-
+    # parsing of messages (TODO: make pure funcs and move to comm_analyzer)
     def _message_type(self, typ):
         if isinstance(typ, OutputMessage):
             return 0
@@ -421,7 +399,6 @@ class WaveformDock(QtWidgets.QDockWidget):
             return 2
         if isinstance(typ, StoppedMessage):
             return 3
-        print("invalid message type")
 
     def _parse_messages(self, messages):
         channels = set()
@@ -448,3 +425,41 @@ class WaveformDock(QtWidgets.QDockWidget):
 
         self.channel_mgr.data = data
         self.channel_mgr.traceDataChanged.emit()
+    
+    # connect to devicedb
+    async def start(self, server, port):
+        await self.subscriber.connect(server, port)
+
+    async def stop(self):
+        await self.subscriber.close()
+        if self._receive_task is not None:
+            self._receive_task.cancel()
+            try:
+                await asyncio.wait_for(self._receive_task, None)
+            except asyncio.CancelledError:
+                pass
+
+    def init_ddb(self, ddb):
+        self.ddb = ddb
+
+    def update_ddb(self, mod):
+        channel_names = dict()
+        for name, desc in self.ddb.items():
+            if isinstance(desc, dict) and desc["type"] == "local":
+                if "arguments" in desc and "channel" in desc["arguments"]:
+                    channel = desc["arguments"]["channel"]
+                    channel_names[channel] = name
+                elif desc["type"] == "controller" and name == "core_analyzer":
+                    self.rtio_addr = desc["host"]
+                    self.rtio_port = desc.get("port_proxy", 1382)
+        self.channel_mgr.channel_names = channel_names
+
+    # handler for ccb
+    def ccb_notify(self, message):
+        try:
+            service = message["service"]
+            if service == "show_trace":
+                asyncio.ensure_future(self._sync_proxy_task())
+        except:
+            logger.error("failed to process CCB", exc_info=True)
+
