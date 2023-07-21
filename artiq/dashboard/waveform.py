@@ -3,7 +3,7 @@ from PyQt5.QtCore import Qt
 
 from sipyco.keepalive import async_open_connection
 from sipyco.sync_struct import Subscriber
-from artiq.gui.tools import LayoutWidget, get_open_file_name
+from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
 from artiq.dashboard.vcd_parser import SimpleVCDParser
 from artiq.coredevice.comm_analyzer import decode_dump, InputMessage, OutputMessage, StoppedMessage, ExceptionMessage
 import numpy as np
@@ -345,9 +345,20 @@ class WaveformDock(QtWidgets.QDockWidget):
         asyncio.ensure_future(self._save_trace_task())
 
     async def _save_trace_task(self):
-        if dump is not None:
-            pass
-
+        try:
+            filename = await get_save_file_name(
+                    self,
+                    "Save Raw Dump",
+                    "c://",
+                    "All files (*.*)")
+        except asyncio.CancelledError:
+            return
+        try:
+            with open(filename, 'wb') as f:
+                f.write(self.dump)
+        except:
+            logger.error("Failed to save binary trace file",
+                         exc_info=True)
 
     # sync with proxy
     def _sync_proxy_clicked(self):
