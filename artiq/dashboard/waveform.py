@@ -63,8 +63,8 @@ class ActiveChannelList(QtWidgets.QListWidget):
         data_format_action = QtWidgets.QAction("Data Format", self)
         data_format_action.setMenu(data_format_menu)
         self.addAction(data_format_action)
-        int_format.triggered.connect(self.set_int_format)
-        float_format.triggered.connect(self.set_float_format)
+        int_format.triggered.connect(self.set_waveform_int)
+        float_format.triggered.connect(self.set_waveform_float)
 
         # Message type to display
         message_type_action = QtWidgets.QAction("Filter message types...", self)
@@ -88,17 +88,17 @@ class ActiveChannelList(QtWidgets.QListWidget):
                                          channel=channel)
         dialog.open()
 
-    def set_format(self, ty):
+    def set_waveform_datatype(self, ty):
         item = self.currentItem()
         channel = self.channel_mgr.id(item.text())
         self.channel_mgr.display_types[channel] = ty
         self.channel_mgr.broadcast_active()
 
-    def set_int_format(self):
-        self.set_format(DisplayType.INT_64)
+    def set_waveform_int(self):
+        self.set_waveform_datatype(DisplayType.INT_64)
 
-    def set_float_format(self):
-        self.set_format(DisplayType.FLOAT_64)
+    def set_waveform_float(self):
+        self.set_waveform_datatype(DisplayType.FLOAT_64)
 
     def add_channel_widget(self):
         self.add_channel_dialog.open()
