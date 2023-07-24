@@ -13,6 +13,7 @@ import itertools
 import asyncio
 import struct
 from enum import Enum
+import time
 
 import logging
 
@@ -166,17 +167,17 @@ class WaveformWidget(pg.PlotWidget):
         self.showGrid(True, True, 0.5)
         self.setLabel('bottom', text='time', units='s')
         self.cmgr = channel_mgr
-        self.cmgr.activeChannelsChanged.connect(self.update_channels)
-        self.cmgr.traceDataChanged.connect(self.update_channels)
+        self.cmgr.activeChannelsChanged.connect(self.refresh_display)
+        self.cmgr.traceDataChanged.connect(self.refresh_display)
         self.plots = list()
         self.left_mouse_pressed = False
         self.refresh_display()
 
     def refresh_display(self):
+        start = time.monotonic()
         self.display_graph()
-
-    def update_channels(self):
-        self.refresh_display()
+        end = time.monotonic()
+        logger.info(f"Refresh took {(end - start)*1000} ms")
 
     def display_graph(self):
         # redraw with each update - not expecting frequent updates
