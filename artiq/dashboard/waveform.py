@@ -39,6 +39,7 @@ class ActiveChannelList(QtWidgets.QListWidget):
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self.setDragEnabled(True)
         self.setDropIndicatorShown(True)
+        self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
        
         # Add channel
