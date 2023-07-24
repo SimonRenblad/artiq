@@ -159,7 +159,6 @@ class AddChannelDialog(QtWidgets.QDialog):
             self.waveform_channel_list.addItem(self.channel_mgr.name(channel))
 
 
-
 class WaveformWidget(pg.PlotWidget):
     def __init__(self, parent=None, channel_mgr=None):
         pg.PlotWidget.__init__(self, parent=parent)
@@ -225,6 +224,7 @@ class WaveformWidget(pg.PlotWidget):
         self.plots[(channel, msg_type.value)] = pdi # change this to list / set
         return
 
+
 class ChannelManager(QtCore.QObject):
     activeChannelsChanged = QtCore.pyqtSignal()
     traceDataChanged = QtCore.pyqtSignal()
@@ -279,6 +279,8 @@ class WaveformDock(QtWidgets.QDockWidget):
     def __init__(self):
         QtWidgets.QDockWidget.__init__(self, "Waveform")
         self.dump = None
+        self.rtio_addr = None
+        self.rtio_port = None
         self.setObjectName("Waveform")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
                          QtWidgets.QDockWidget.DockWidgetFloatable)
@@ -360,8 +362,6 @@ class WaveformDock(QtWidgets.QDockWidget):
 
     async def _sync_proxy_task(self):
         # temp assumed variables
-        self.rtio_addr = "::1" # true loop back address
-        self.rtio_port = 1382 # proxy for rtio
         try:
             self._reader, self._writer = await async_open_connection(
                     host=self.rtio_addr,
@@ -434,8 +434,8 @@ class WaveformDock(QtWidgets.QDockWidget):
     def update_ddb(self, mod):
         channel_names = dict()
         for name, desc in self.ddb.items():
-            if isinstance(desc, dict) and desc["type"] == "local":
-                if "arguments" in desc and "channel" in desc["arguments"]:
+            if isinstance(desc, dict):
+                if "arguments" in desc and "channel" in desc["arguments"] and desc["type"] == "local":
                     channel = desc["arguments"]["channel"]
                     channel_names[channel] = name
                 elif desc["type"] == "controller" and name == "core_analyzer":
