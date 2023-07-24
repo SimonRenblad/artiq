@@ -200,7 +200,7 @@ class WaveformWidget(pg.PlotWidget):
 
     def _display_waveform(self, channel, msg_type):
         display_type = self.cmgr.display_types.get(channel, DisplayType.INT_64)
-        data = self.cmgr.data[channel][msg_type.value]
+        data = self.cmgr.data[channel].get(msg_type.value, [])
         if len(data) == 0:
             return
         x_data = [x.rtio_counter for x in data]
@@ -247,6 +247,7 @@ class ChannelManager(QtCore.QObject):
     def name(self, channel):
         return self.channel_names.get(channel, str(channel))
 
+    # TODO: implement inverse dict for performance improvement
     def id(self, name):
         for k, v in self.channel_names.items():
             if v == name:
@@ -397,27 +398,18 @@ class WaveformDock(QtWidgets.QDockWidget):
 
     def _parse_messages(self, messages):
         channels = set()
-        for message in messages:
-            message_type = MessageType[message.__class__.__name__]
-            if message_type == MessageType.StoppedMessage:
-                break
-            channels.add(message.channel)
-        self.channel_mgr.channels = channels
         data = dict()
-        for channel in channels:
-            data[channel] = {
-                    0: [],
-                    1: [],
-                    2: [],
-                    3: []
-            }
         for message in messages:
             message_type = MessageType[message.__class__.__name__]
             if message_type == MessageType.StoppedMessage:
                 break
-            channel = message.channel
-            data[channel][message_type.value].append(message)
-
+            c = message.channel
+            v = message_type.value
+            channels.add(c)
+            data.setdefault(c, {})
+            data[c].setdefault(v, [])
+            data[c][v].append(message)
+        self.channel_mgr.channels = channels
         self.channel_mgr.data = data
         self.channel_mgr.traceDataChanged.emit()
     
