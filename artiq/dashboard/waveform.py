@@ -225,10 +225,13 @@ class WaveformWidget(pg.PlotWidget):
                             pen={'color': msg_type, 'width': 1})
             self.plots[(channel, msg_type)] = pdi
         else:
-            pdi = self.plot(x_data, 
+            # display exception labels on x-axis
+            y_data = [0]*len(data)
+            pdi = self.plot(x_data,
+                            y_data,
                             symbol='x',
                             name=f"Channel: {channel}, {message_type_string(msg_type)}",
-                            pen={'color': msg_type, 'width': 1})
+                            pen=None)
             self.plots[(channel, msg_type)] = pdi
         return
 
