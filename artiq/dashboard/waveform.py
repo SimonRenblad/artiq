@@ -107,7 +107,7 @@ class MessageTypeFilterDialog(QtWidgets.QDialog):
         self.b0 = QtWidgets.QCheckBox("OutputMessage") 
         self.b1 = QtWidgets.QCheckBox("InputMessage") 
         self.b2 = QtWidgets.QCheckBox("ExceptionMessage")
-        msg_types = self.cmgr.msg_types.get(self.channel, [0,1])
+        msg_types = self.cmgr.msg_types.get(self.channel, set())
         if 0 in msg_types:
             self.b0.setChecked(True)
         if 1 in msg_types:
@@ -123,13 +123,13 @@ class MessageTypeFilterDialog(QtWidgets.QDialog):
         self.setLayout(layout)
     
     def confirm_filter(self):
-        self.cmgr.msg_types[self.channel] = list()
+        self.cmgr.msg_types[self.channel] = set()
         if self.b0.isChecked():
-            self.cmgr.msg_types[self.channel].append(0)
+            self.cmgr.msg_types[self.channel].add(MessageType.OutputMessage)
         if self.b1.isChecked():
-            self.cmgr.msg_types[self.channel].append(1)
+            self.cmgr.msg_types[self.channel].add(MessageType.InputMessage)
         if self.b2.isChecked():
-            self.cmgr.msg_types[self.channel].append(2)
+            self.cmgr.msg_types[self.channel].add(MessageType.ExceptionMessage)
         self.cmgr.broadcast_active()
         self.close()
 
@@ -168,7 +168,7 @@ class WaveformWidget(pg.PlotWidget):
         self.cmgr = channel_mgr
         self.cmgr.activeChannelsChanged.connect(self.update_channels)
         self.cmgr.traceDataChanged.connect(self.update_channels)
-        self.plots = dict()
+        self.plots = list()
         self.left_mouse_pressed = False
         self.refresh_display()
 
@@ -180,15 +180,13 @@ class WaveformWidget(pg.PlotWidget):
 
     def display_graph(self):
         # redraw with each update - not expecting frequent updates
-        for plot in self.plots.values():
+        for plot in self.plots:
             self.removeItem(plot)
-        self.plots = dict()
-        for channel in self.cmgr.active_channels:
-            self._display_channel(channel)
+        self.plots = list()
 
-    def _display_channel(self, channel):
-        for msg_type in self.cmgr.msg_types.get(channel, [0,1]):
-            self._display_waveform(channel, MessageType(msg_type))
+        for channel in self.cmgr.active_channels:
+            for msg_type in self.cmgr.msg_types[channel]:
+                self._display_waveform(channel, MessageType(msg_type))
     
     @staticmethod
     def convert_type(data, display_type):
@@ -221,7 +219,7 @@ class WaveformWidget(pg.PlotWidget):
                         symbol=symbol,
                         name=f"Channel: {channel}, {msg_type.name}",
                         pen=pen)
-        self.plots[(channel, msg_type.value)] = pdi # change this to list / set
+        self.plots.append(pdi)
         return
 
 
@@ -401,18 +399,26 @@ class WaveformDock(QtWidgets.QDockWidget):
     def _parse_messages(self, messages):
         channels = set()
         data = dict()
+        msg_types = dict()
         for message in messages:
+            # get class name directly to avoid name conflict with comm_analyzer.MessageType
             message_type = MessageType[message.__class__.__name__]
             if message_type == MessageType.StoppedMessage:
                 break
+
             c = message.channel
             v = message_type.value
-            channels.add(c)
+
+            msg_types.setdefault(c, set())
             data.setdefault(c, {})
             data[c].setdefault(v, [])
+
+            channels.add(c)
+            msg_types[c].add(v)
             data[c][v].append(message)
         self.channel_mgr.channels = channels
         self.channel_mgr.data = data
+        self.channel_mgr.msg_types = msg_types
         self.channel_mgr.traceDataChanged.emit()
     
     # connect to devicedb
