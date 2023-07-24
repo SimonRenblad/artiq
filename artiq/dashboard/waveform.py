@@ -4,8 +4,7 @@ from PyQt5.QtCore import Qt
 from sipyco.keepalive import async_open_connection
 from sipyco.sync_struct import Subscriber
 from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
-from artiq.dashboard.vcd_parser import SimpleVCDParser
-from artiq.coredevice.comm_analyzer import decode_dump, InputMessage, OutputMessage, StoppedMessage, ExceptionMessage
+from artiq.coredevice.comm_analyzer import decode_dump
 import numpy as np
 import pyqtgraph as pg
 import collections
@@ -19,15 +18,15 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def message_type_string(type_as_int):
-    if type_as_int == 0:
-        return "OutputMessage"
-    if type_as_int == 1:
-        return "InputMessage"
-    if type_as_int == 2:
-        return "ExceptionMessage"
-    if type_as_int == 3:
-        return "StoppedMessage"
+class MessageType(Enum):
+    OutputMessage = 0
+    InputMessage = 1
+    ExceptionMessage = 2
+    StoppedMessage = 3
+
+class DisplayType(Enum):
+    INT_64 = 0
+    FLOAT_64 = 1
 
 class ActiveChannelList(QtWidgets.QListWidget):
 
@@ -43,8 +42,9 @@ class ActiveChannelList(QtWidgets.QListWidget):
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
        
         # Add channel
+        self.add_channel_dialog = AddChannelDialog(self, channel_mgr=self.channel_mgr)
         add_channel = QtWidgets.QAction("Add channel...", self)
-        add_channel.triggered.connect(self.add_channel_widget)
+        add_channel.triggered.connect(lambda: self.add_channel_dialog.open())
         add_channel.setShortcut("CTRL+N")
         add_channel.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel)
@@ -63,15 +63,14 @@ class ActiveChannelList(QtWidgets.QListWidget):
         data_format_action = QtWidgets.QAction("Data Format", self)
         data_format_action.setMenu(data_format_menu)
         self.addAction(data_format_action)
-        int_format.triggered.connect(self.set_waveform_int)
-        float_format.triggered.connect(self.set_waveform_float)
+        int_format.triggered.connect(lambda: self.set_waveform_datatype(DisplayType.INT_64))
+        float_format.triggered.connect(lambda: self.set_waveform_datatype(DisplayType.FLOAT_64))
 
         # Message type to display
         message_type_action = QtWidgets.QAction("Filter message types...", self)
         self.addAction(message_type_action)
         message_type_action.triggered.connect(self.display_message_type_filter)
 
-        self.add_channel_dialog = AddChannelDialog(self, channel_mgr=self.channel_mgr)
 
     def remove_channel(self):
         item = self.currentItem()
@@ -93,15 +92,6 @@ class ActiveChannelList(QtWidgets.QListWidget):
         channel = self.channel_mgr.id(item.text())
         self.channel_mgr.display_types[channel] = ty
         self.channel_mgr.broadcast_active()
-
-    def set_waveform_int(self):
-        self.set_waveform_datatype(DisplayType.INT_64)
-
-    def set_waveform_float(self):
-        self.set_waveform_datatype(DisplayType.FLOAT_64)
-
-    def add_channel_widget(self):
-        self.add_channel_dialog.open()
 
     def add_channel(self, channel):
         self.addItem(channel)
@@ -169,9 +159,6 @@ class AddChannelDialog(QtWidgets.QDialog):
             self.waveform_channel_list.addItem(self.channel_mgr.name(channel))
 
 
-class DisplayType(Enum):
-    INT_64 = 0
-    FLOAT_64 = 1
 
 class WaveformWidget(pg.PlotWidget):
     def __init__(self, parent=None, channel_mgr=None):
@@ -202,7 +189,7 @@ class WaveformWidget(pg.PlotWidget):
 
     def _display_channel(self, channel):
         for msg_type in self.cmgr.msg_types.get(channel, [0,1]):
-            self._display_waveform(channel, msg_type)
+            self._display_waveform(channel, MessageType(msg_type))
     
     @staticmethod
     def convert_type(data, display_type):
@@ -213,27 +200,27 @@ class WaveformWidget(pg.PlotWidget):
 
     def _display_waveform(self, channel, msg_type):
         display_type = self.cmgr.display_types.get(channel, DisplayType.INT_64)
-        data = self.cmgr.data[channel][msg_type]
+        data = self.cmgr.data[channel][msg_type.value]
         if len(data) == 0:
             return
         x_data = [x.rtio_counter for x in data]
-        if msg_type < 2:
+        if msg_type in [MessageType.OutputMessage, MessageType.InputMessage]:
             y_data = [self.convert_type(y.data, display_type) for y in data]
 
             pdi = self.plot(x_data, 
                             y_data, 
-                            name=f"Channel: {channel}, {message_type_string(msg_type)}",
-                            pen={'color': msg_type, 'width': 1})
-            self.plots[(channel, msg_type)] = pdi
+                            name=f"Channel: {channel}, {msg_type.name}",
+                            pen={'color': msg_type.value, 'width': 1})
+            self.plots[(channel, msg_type.value)] = pdi
         else:
             # display exception labels on x-axis
             y_data = [0]*len(data)
             pdi = self.plot(x_data,
                             y_data,
                             symbol='x',
-                            name=f"Channel: {channel}, {message_type_string(msg_type)}",
+                            name=f"Channel: {channel}, {msg_type.name}",
                             pen=None)
-            self.plots[(channel, msg_type)] = pdi
+            self.plots[(channel, msg_type.value)] = pdi
         return
 
 class ChannelManager(QtCore.QObject):
@@ -403,24 +390,17 @@ class WaveformDock(QtWidgets.QDockWidget):
         decoded_dump = decode_dump(dump)
         self.messages = decoded_dump.messages
         self._parse_messages(self.messages)
-
-    # parsing of messages (TODO: make pure funcs and move to comm_analyzer)
-    def _message_type(self, typ):
-        if isinstance(typ, OutputMessage):
-            return 0
-        if isinstance(typ, InputMessage):
-            return 1
-        if isinstance(typ, ExceptionMessage):
-            return 2
-        if isinstance(typ, StoppedMessage):
-            return 3
+    
+    # pull data from device buffer
+    def _pull_from_device_clicked(self):
+        asyncio.ensure_future(self._pull_from_device_task())
 
     def _parse_messages(self, messages):
         channels = set()
         for message in messages:
-            if self._message_type(message) == 3:
+            message_type = MessageType[message.__class__.__name__]
+            if message_type == MessageType.StoppedMessage:
                 break
-            message_type = self._message_type(message)
             channels.add(message.channel)
         self.channel_mgr.channels = channels
         data = dict()
@@ -432,11 +412,11 @@ class WaveformDock(QtWidgets.QDockWidget):
                     3: []
             }
         for message in messages:
-            message_type = self._message_type(message)
-            if message_type == 3:
+            message_type = MessageType[message.__class__.__name__]
+            if message_type == MessageType.StoppedMessage:
                 break
             channel = message.channel
-            data[channel][message_type].append(message)
+            data[channel][message_type.value].append(message)
 
         self.channel_mgr.data = data
         self.channel_mgr.traceDataChanged.emit()
