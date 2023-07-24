@@ -203,24 +203,26 @@ class WaveformWidget(pg.PlotWidget):
         data = self.cmgr.data[channel].get(msg_type.value, [])
         if len(data) == 0:
             return
-        x_data = [x.rtio_counter for x in data]
-        if msg_type in [MessageType.OutputMessage, MessageType.InputMessage]:
-            y_data = [self.convert_type(y.data, display_type) for y in data]
+        x_data = np.zeros(len(data))
+        y_data = np.zeros(len(data))
+        for i, x in enumerate(data):
+            x_data[i] = x.rtio_counter
 
-            pdi = self.plot(x_data, 
-                            y_data, 
-                            name=f"Channel: {channel}, {msg_type.name}",
-                            pen={'color': msg_type.value, 'width': 1})
-            self.plots[(channel, msg_type.value)] = pdi
+        pen = None
+        symbol = None
+        if msg_type in [MessageType.OutputMessage, MessageType.InputMessage]:
+            for i, y in enumerate(data):
+                y_data[i] = self.convert_type(y.data, display_type)
+            pen = {'color': msg_type.value, 'width': 1}
         else:
-            # display exception labels on x-axis
-            y_data = [0]*len(data)
-            pdi = self.plot(x_data,
-                            y_data,
-                            symbol='x',
-                            name=f"Channel: {channel}, {msg_type.name}",
-                            pen=None)
-            self.plots[(channel, msg_type.value)] = pdi
+            symbol = 'x'
+
+        pdi = self.plot(x_data,
+                        y_data,
+                        symbol=symbol,
+                        name=f"Channel: {channel}, {msg_type.name}",
+                        pen=pen)
+        self.plots[(channel, msg_type.value)] = pdi # change this to list / set
         return
 
 class ChannelManager(QtCore.QObject):
