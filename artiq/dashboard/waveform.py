@@ -380,7 +380,6 @@ class WaveformDock(QtWidgets.QDockWidget):
                     interval=1,
                     max_fails=3,
                 )
-
             try:
                 self._writer.write(b"ARTIQ rtio analyzer\n")
                 self._receive_task = asyncio.ensure_future(self._receive_cr())
@@ -396,21 +395,40 @@ class WaveformDock(QtWidgets.QDockWidget):
         else:
             logger.info("ARTIQ dashboard connected to rtio analyzer (%s)",
                         self.rtio_addr)
-            self._writer.write(b"\x00") ## make separate coroutine
 
     async def _receive_cr(self):
-        while True:
-            dump = await self._reader.read()
-            decoded_dump = decode_dump(dump)
-            self.messages = decoded_dump.messages
-            self._parse_messages(self.messages)
+        try:
+            while True:
+                header = await self._reader.read(16)
+                if not header:
+                    return
+                if header[0] == ord('E'):
+                    endian = '>'
+                elif header[0] == ord('e'):
+                    endian = '<'
+                else:
+                    raise ValueError
+                print(header[1:16])
+                parts = struct.unpack(endian + "IQbbb", header[1:16])
+                (sent_bytes, total_byte_count,
+                 error_occurred, log_channel, dds_onehot_sel) = parts
+                data = await self._reader.read(sent_bytes)
+                dump = header + data
+                decoded_dump = decode_dump(dump)
+                self.messages = decoded_dump.messages
+                self._parse_messages(self.messages)
+        except asyncio.CancelledError:
+            raise
+        except:
+            logger.error("Moninj connection terminating with exception", exc_info=True)
     
     # pull data from device buffer
     def _pull_from_device_clicked(self):
         asyncio.ensure_future(self._pull_from_device_task())
 
     async def _pull_from_device_task(self):
-        self._writer.write(b"\x01")
+        self._writer.write(b"\x00") ## make separate coroutine
+        # self._writer.write(b"\x01")
 
     def _parse_messages(self, messages):
         channels = set()
@@ -449,6 +467,10 @@ class WaveformDock(QtWidgets.QDockWidget):
                 await asyncio.wait_for(self._receive_task, None)
             except asyncio.CancelledError:
                 pass
+            finally:
+                self._writer.close()
+                del self._reader
+                del self._writer
 
     def init_ddb(self, ddb):
         self.ddb = ddb
