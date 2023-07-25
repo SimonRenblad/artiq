@@ -19,19 +19,16 @@ class ProxyConnection:
 
     # naive version read smth -> writes back synchronously
     async def handle(self):
-        ty = await self.reader.read(1) # read 1 byte
-        if ty == b"\x00": # get dump
+        while True:
+            ty = await self.reader.read(1) # read 1 byte
+            print(ty)
+            if ty == b"\x01" or self.cached_dump["data"] is None:
+                print("INFO: clicked pull to reload")
+                dump = b"Hello World!\n"
+                with open("dump2.bin", "rb") as f:
+                    dump = f.read()
+                self.cached_dump["data"] = dump
             self.writer.write(self.cached_dump["data"])
-            self.writer.write_eof()
-            await self.writer.drain()
-        elif ty == b"\x01": # pull from device buffer
-            #dump = get_analyzer_dump(self.host, self.port) 
-            dump = b"Hello World!\n"
-            with open("dump_million.bin", "rb") as f:
-                dump = f.read()
-            self.cached_dump["data"] = dump
-            self.writer.write(self.cached_dump["data"])
-            self.writer.write_eof()
             await self.writer.drain()
 
 
