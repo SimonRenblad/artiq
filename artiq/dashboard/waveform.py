@@ -286,28 +286,39 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.channel_mgr = ChannelManager()
         grid = LayoutWidget()
         self.setWidget(grid)
+
         self.load_trace_button = QtWidgets.QPushButton("Load Trace")
         self.load_trace_button.setIcon(
                 QtWidgets.QApplication.style().standardIcon(
                     QtWidgets.QStyle.SP_DialogOpenButton))
         grid.addWidget(self.load_trace_button, 0, 0)
+        self.load_trace_button.clicked.connect(self._load_trace_clicked)
+
         self.save_trace_button = QtWidgets.QPushButton("Save Trace")
         self.save_trace_button.setIcon(
                 QtWidgets.QApplication.style().standardIcon(
                     QtWidgets.QStyle.SP_DriveFDIcon))
         grid.addWidget(self.save_trace_button, 0, 1)
+        self.save_trace_button.clicked.connect(self._save_trace_clicked)
+
         self.sync_button = QtWidgets.QPushButton("Sync")
         self.sync_button.setIcon(
                 QtWidgets.QApplication.style().standardIcon(
                     QtWidgets.QStyle.SP_BrowserReload))
         grid.addWidget(self.sync_button, 0, 2)
+        self.sync_button.clicked.connect(self._sync_proxy_clicked)
+
+        self.pull_button = QtWidgets.QPushButton("Pull from device buffer")
+        self.pull_button.setIcon(
+                QtWidgets.QApplication.style().standardIcon(
+                    QtWidgets.QStyle.SP_ArrowUp))
+        grid.addWidget(self.pull_button, 0, 3)
+        self.pull_button.clicked.connect(self._pull_from_device_clicked)
+        
         self.waveform_active_channel_view = ActiveChannelList(channel_mgr=self.channel_mgr)
         grid.addWidget(self.waveform_active_channel_view, 1, 0, colspan=2)
         self.waveform_widget = WaveformWidget(channel_mgr=self.channel_mgr) 
         grid.addWidget(self.waveform_widget, 1, 2, colspan=10)
-        self.load_trace_button.clicked.connect(self._load_trace_clicked)
-        self.save_trace_button.clicked.connect(self._save_trace_clicked)
-        self.sync_button.clicked.connect(self._sync_proxy_clicked)
 
         self.subscriber = Subscriber("devices", self.init_ddb, self.update_ddb)
         self._receive_task = None
@@ -388,14 +399,18 @@ class WaveformDock(QtWidgets.QDockWidget):
             self._writer.write(b"\x00") ## make separate coroutine
 
     async def _receive_cr(self):
-        dump = await self._reader.read()
-        decoded_dump = decode_dump(dump)
-        self.messages = decoded_dump.messages
-        self._parse_messages(self.messages)
+        while True:
+            dump = await self._reader.read()
+            decoded_dump = decode_dump(dump)
+            self.messages = decoded_dump.messages
+            self._parse_messages(self.messages)
     
     # pull data from device buffer
     def _pull_from_device_clicked(self):
         asyncio.ensure_future(self._pull_from_device_task())
+
+    async def _pull_from_device_task(self):
+        self._writer.write(b"\x01")
 
     def _parse_messages(self, messages):
         channels = set()
