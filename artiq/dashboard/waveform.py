@@ -72,6 +72,15 @@ class ActiveChannelList(QtWidgets.QListWidget):
         self.addAction(message_type_action)
         message_type_action.triggered.connect(self.display_message_type_filter)
 
+        # Save list 
+#        save_list_action = QtWidgets.QAction("Save active list", self)
+#        self.addAction(save_list_action)
+#        save_list_action.triggered.connect(self.save_current_list)
+
+#    def save_current_list(self):
+#        l = self.channel_mgr.active_channels
+#
+        # save in some cache or save as file... not sure yet
 
     def remove_channel(self):
         item = self.currentItem()
