@@ -161,6 +161,8 @@ class AddChannelDialog(QtWidgets.QDialog):
 
 
 class WaveformWidget(pg.PlotWidget):
+    mouseMoved = QtCore.pyqtSignal(float, float)
+
     def __init__(self, parent=None, channel_mgr=None):
         pg.PlotWidget.__init__(self, parent=parent)
         self.addLegend()
@@ -172,7 +174,12 @@ class WaveformWidget(pg.PlotWidget):
         self.plots = list()
         self.left_mouse_pressed = False
         self.refresh_display()
+        self.proxy = pg.SignalProxy(self.scene().sigMouseMoved, rateLimit=60, slot=self.get_cursor_coordinates)
 
+    def get_cursor_coordinates(self, event):
+        mousePoint = self.getPlotItem().vb.mapSceneToView(event[0])
+        self.mouseMoved.emit(mousePoint.x(), mousePoint.y())
+    
     def refresh_display(self):
         start = time.monotonic()
         self.display_graph()
@@ -314,14 +321,21 @@ class WaveformDock(QtWidgets.QDockWidget):
                     QtWidgets.QStyle.SP_ArrowUp))
         grid.addWidget(self.pull_button, 0, 3)
         self.pull_button.clicked.connect(self._pull_from_device_clicked)
+
+        self.coord_label = QtWidgets.QLabel("x: y: ")
+        grid.addWidget(self.coord_label, 1, 2, colspan=10)
         
         self.waveform_active_channel_view = ActiveChannelList(channel_mgr=self.channel_mgr)
-        grid.addWidget(self.waveform_active_channel_view, 1, 0, colspan=2)
+        grid.addWidget(self.waveform_active_channel_view, 2, 0, colspan=2)
         self.waveform_widget = WaveformWidget(channel_mgr=self.channel_mgr) 
-        grid.addWidget(self.waveform_widget, 1, 2, colspan=10)
+        grid.addWidget(self.waveform_widget, 2, 2, colspan=10)
+        self.waveform_widget.mouseMoved.connect(self.update_coord_label)
 
         self.subscriber = Subscriber("devices", self.init_ddb, self.update_ddb)
         self._receive_task = None
+
+    def update_coord_label(self, coord_x, coord_y):
+        self.coord_label.setText(f"x: {coord_x} y: {coord_y}")
 
     # load from binary file
     def _load_trace_clicked(self):
