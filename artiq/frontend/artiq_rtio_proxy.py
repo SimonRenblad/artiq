@@ -10,24 +10,30 @@ from artiq.coredevice.comm_analyzer import get_analyzer_dump
 # 1385 is not a port taken by defaults -> recommend for this
 
 class ProxyConnection:
-    def __init__(self, reader, writer, host, port):
+    def __init__(self, reader, writer, host, port, cached_dump):
         self.reader = reader
         self.writer = writer
         self.host = host
         self.port = port
+        self.cached_dump = cached_dump
 
     # naive version read smth -> writes back synchronously
     async def handle(self):
         ty = await self.reader.read(1) # read 1 byte
         if ty == b"\x00": # get dump
-            #dump = get_analyzer_dump(self.host, self.port) 
-            dump = b"Hello World!\n"
-            with open("dump_huge.bin", "rb") as f:
-                dump = f.read()
-            self.writer.write(dump)
+            self.writer.write(self.cached_dump["data"])
             self.writer.write_eof()
             await self.writer.drain()
-            self.writer.close()
+        elif ty == b"\x01": # pull from device buffer
+            #dump = get_analyzer_dump(self.host, self.port) 
+            dump = b"Hello World!\n"
+            with open("dump_million.bin", "rb") as f:
+                dump = f.read()
+            self.cached_dump["data"] = dump
+            self.writer.write(self.cached_dump["data"])
+            self.writer.write_eof()
+            await self.writer.drain()
+
 
 # Proxy the core analyzer
 class ProxyServer(AsyncioServer):
@@ -35,13 +41,14 @@ class ProxyServer(AsyncioServer):
         AsyncioServer.__init__(self)
         self.host = host
         self.port = port
+        self.cached_dump = {"data": None}
 
     async def _handle_connection_cr(self, reader, writer):
         line = await reader.readline()
         if line != b"ARTIQ rtio analyzer\n":
             logger.error("incorrect magic")
             return
-        await ProxyConnection(reader, writer, self.host, self.port).handle()
+        await ProxyConnection(reader, writer, self.host, self.port, self.cached_dump).handle()
 
 
 class PingTarget:
