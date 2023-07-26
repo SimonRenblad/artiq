@@ -251,7 +251,8 @@ class BijectiveMap:
         self._ltor = dict()
         self._rtol = dict()
 
-    def emplace(self, left, right):
+    def add(self, left, right):
+        del self._ltor[right]
         self._ltor[left] = right
         self._rtol[right] = left
 
@@ -397,7 +398,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         # default names if not defined in devicedb
         for c in channels:
             if c not in self.cmgr.channel_name_id_map.rights():
-                self.cmgr.channel_name_id_map.emplace("unnamed_channel"+str(c), c)
+                self.cmgr.channel_name_id_map.add("unnamed_channel"+str(c), c)
 
         self.cmgr.channels = channels
         self.cmgr.data = data
@@ -484,7 +485,7 @@ class WaveformDock(QtWidgets.QDockWidget):
             endian = '<'
         else:
             raise ValueError
-        return struct.unpack(endian + "I", header[1:5])
+        return struct.unpack(endian + "I", header[1:5])[0]
 
     async def _receive_cr(self):
         try:
@@ -536,7 +537,7 @@ class WaveformDock(QtWidgets.QDockWidget):
             if isinstance(desc, dict):
                 if "arguments" in desc and "channel" in desc["arguments"] and desc["type"] == "local":
                     channel = desc["arguments"]["channel"]
-                    channel_name_id_map.emplace(name, channel)
+                    channel_name_id_map.add(name, channel)
                 elif desc["type"] == "controller" and name == "core_analyzer":
                     self.rtio_addr = desc["host"]
                     self.rtio_port = desc.get("port_proxy", 1382)

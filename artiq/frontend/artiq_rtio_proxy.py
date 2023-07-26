@@ -21,9 +21,7 @@ class ProxyConnection:
     async def handle(self):
         while True:
             ty = await self.reader.read(1) # read 1 byte
-            print(ty)
             if ty == b"\x01" or self.cached_dump["data"] is None:
-                print("INFO: clicked pull to reload")
                 dump = b"Hello World!\n"
                 with open("dump2.bin", "rb") as f:
                     dump = f.read()
@@ -52,6 +50,21 @@ class PingTarget:
     def ping(self):
         return True
 
+class RTIOAnalyzerControl:
+    def __init__(self, host, port):
+        self.host = host
+        self.port = port
+        self.underlying = {}
+        self.data = Notifier(self.underlying)
+
+    # rpc to pull from device
+    def pull_from_device(self):
+        # dump = get_analyzer_dump(self.host, self.port)
+        dump = b""
+        with open("dump2.bin", "rb") as f:
+            dump = f.read()
+        setattr(self.data, "data", dump) # calls the notifies
+
 def get_argparser():
     parser = argparse.ArgumentParser(
         description="ARTIQ RTIO analyzer proxy")
@@ -60,8 +73,8 @@ def get_argparser():
         ("proxy", "proxying", 1382),
         ("control", "control", 1385)
     ])
-    parser.add_argument("--simulation", action="store_true",
-                        help="Simulation - does not connect to device")
+    #parser.add_argument("--simulation", action="store_true",
+    #                    help="Simulation - does not connect to device")
     parser.add_argument("core_addr", metavar="CORE_ADDR",
                         help="hostname or IP address of the core device")
     return parser
@@ -78,6 +91,7 @@ def main():
         signal_handler = SignalHandler() # handles Ctrl-C and terminate signals
         signal_handler.setup()
         try:
+            device
             proxy_server = ProxyServer(args.core_addr)
             loop.run_until_complete(proxy_server.start(bind_address, args.port_proxy))
             try:
