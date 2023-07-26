@@ -33,7 +33,7 @@ class ActiveChannelList(QtWidgets.QListWidget):
 
     def __init__(self, channel_mgr):
         QtWidgets.QListWidget.__init__(self)
-        self.channel_mgr = channel_mgr
+        self.cmgr = channel_mgr
         self.active_channels = []
         
         self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
@@ -43,7 +43,7 @@ class ActiveChannelList(QtWidgets.QListWidget):
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
        
         # Add channel
-        self.add_channel_dialog = AddChannelDialog(self, channel_mgr=self.channel_mgr)
+        self.add_channel_dialog = AddChannelDialog(self, channel_mgr=self.cmgr)
         add_channel = QtWidgets.QAction("Add channel...", self)
         add_channel.triggered.connect(lambda: self.add_channel_dialog.open())
         add_channel.setShortcut("CTRL+N")
@@ -81,31 +81,37 @@ class ActiveChannelList(QtWidgets.QListWidget):
 #        l = self.channel_mgr.active_channels
 #
         # save in some cache or save as file... not sure yet
+    def _selected_channel(self):
+        item = self.currentItem()
+        s = item.text()
+        c = self.cmgr.channel_name_id_map._0.get(s, s)
+        c = int(c)
+        return item, c
 
     def remove_channel(self):
-        item = self.currentItem()
-        channel = self.channel_mgr.id(item.text())
+        item, channel = self._selected_channel()
         self.takeItem(self.row(item))
-        self.channel_mgr.active_channels.remove(channel)
-        self.channel_mgr.broadcast_active()
+        self.cmgr.active_channels.remove(channel)
+        self.cmgr.broadcast_active()
 
     def display_message_type_filter(self):
-        item = self.currentItem()
-        channel = self.channel_mgr.id(item.text())
+        item, channel = self._selected_channel()
         dialog = MessageTypeFilterDialog(self, 
-                                         channel_mgr=self.channel_mgr,
+                                         channel_mgr=self.cmgr,
                                          channel=channel)
         dialog.open()
 
     def set_waveform_datatype(self, ty):
-        item = self.currentItem()
-        channel = self.channel_mgr.id(item.text())
-        self.channel_mgr.display_types[channel] = ty
-        self.channel_mgr.broadcast_active()
+        item, channel = self._selected_channel()
+        self.cmgr.display_types[channel] = ty
+        self.cmgr.broadcast_active()
 
     def add_channel(self, channel):
         self.addItem(channel)
-        self.channel_mgr.add_channel(self.channel_mgr.id(channel))
+        channel = self.cmgr.channel_name_id_map._0.get(channel, channel)
+        channel = int(channel)
+        self.cmgr.active_channels.append(channel)
+        self.cmgr.broadcast_active()
 
 class MessageTypeFilterDialog(QtWidgets.QDialog):
     def __init__(self, parent, channel_mgr=None, channel=None):
@@ -148,7 +154,7 @@ class AddChannelDialog(QtWidgets.QDialog):
     def __init__(self, parent, channel_mgr=None):
         QtWidgets.QDialog.__init__(self, parent=parent)
         self.setWindowTitle("Add channel")   
-        self.channel_mgr = channel_mgr
+        self.cmgr = channel_mgr
         self.parent = parent
         grid = QtWidgets.QGridLayout()
         grid.setRowMinimumHeight(1, 40)
@@ -157,7 +163,7 @@ class AddChannelDialog(QtWidgets.QDialog):
         self.waveform_channel_list = QtWidgets.QListWidget()
         grid.addWidget(self.waveform_channel_list, 0, 0)
         self.waveform_channel_list.itemDoubleClicked.connect(self.add_channel)
-        self.channel_mgr.traceDataChanged.connect(self.update_channels)
+        self.cmgr.traceDataChanged.connect(self.update_channels)
 
     def add_channel(self, channel):
         self.parent.add_channel(channel.text())
@@ -165,8 +171,9 @@ class AddChannelDialog(QtWidgets.QDialog):
 
     def update_channels(self):
         self.waveform_channel_list.clear()
-        for channel in self.channel_mgr.channels:
-            self.waveform_channel_list.addItem(self.channel_mgr.name(channel))
+        for channel in self.cmgr.channels:
+            name = self.cmgr.channel_name_id_map._1.get(channel, str(channel))
+            self.waveform_channel_list.addItem(name)
 
 
 class WaveformWidget(pg.PlotWidget):
@@ -239,6 +246,15 @@ class WaveformWidget(pg.PlotWidget):
         self.plots.append(pdi)
         return
 
+# convenience class
+class BijectiveMap:
+    def __init__(self):
+        self._0 = dict()
+        self._1 = dict()
+
+    def emplace(self, first, second):
+        self._0[first] = second
+        self._1[second] = first
 
 class ChannelManager(QtCore.QObject):
     activeChannelsChanged = QtCore.pyqtSignal()
@@ -248,7 +264,7 @@ class ChannelManager(QtCore.QObject):
         QtCore.QObject.__init__(self) 
         self.data = dict()
         self.active_channels = list()
-        self.channel_names = dict()
+        self.channel_name_id_map = BijectiveMap()
         self.msg_types = dict()
         self.channels = set()
         self.display_types = dict()
@@ -260,16 +276,6 @@ class ChannelManager(QtCore.QObject):
 
     def broadcast_active(self):
         self.activeChannelsChanged.emit()
-
-    def name(self, channel):
-        return self.channel_names.get(channel, str(channel))
-
-    # TODO: implement inverse dict for performance improvement
-    def id(self, name):
-        for k, v in self.channel_names.items():
-            if v == name:
-                return k
-        return int(name)
 
     def broadcast_data(self):
         self.traceDataChanged.emit()
@@ -499,16 +505,16 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.ddb = ddb
 
     def update_ddb(self, mod):
-        channel_names = dict()
+        channel_name_id_map = BijectiveMap()
         for name, desc in self.ddb.items():
             if isinstance(desc, dict):
                 if "arguments" in desc and "channel" in desc["arguments"] and desc["type"] == "local":
                     channel = desc["arguments"]["channel"]
-                    channel_names[channel] = name
+                    channel_name_id_map.emplace(name, channel)
                 elif desc["type"] == "controller" and name == "core_analyzer":
                     self.rtio_addr = desc["host"]
                     self.rtio_port = desc.get("port_proxy", 1382)
-        self.channel_mgr.channel_names = channel_names
+        self.channel_mgr.channel_name_id_map = channel_name_id_map
 
     # handler for ccb
     def ccb_notify(self, message):
