@@ -363,6 +363,48 @@ class WaveformDock(QtWidgets.QDockWidget):
     def update_coord_label(self, coord_x, coord_y):
         self.coord_label.setText(f"x: {coord_x} y: {coord_y}")
 
+    # parsing and loading dump
+    @staticmethod
+    def _parse_messages(messages):
+        channels = set()
+        data = dict()
+        msg_types = dict()
+        for message in messages:
+            # get class name directly to avoid name conflict with comm_analyzer.MessageType
+            message_type = MessageType[message.__class__.__name__]
+            if message_type == MessageType.StoppedMessage:
+                break
+
+            c = message.channel
+            v = message_type.value
+
+            msg_types.setdefault(c, set())
+            data.setdefault(c, {})
+            data[c].setdefault(v, [])
+
+            channels.add(c)
+            msg_types[c].add(v)
+            data[c][v].append(message)
+        return channels, data, msg_types
+
+    def _update_from_dump(self, dump):
+        self.dump = dump
+        decoded_dump = decode_dump(dump)
+        messages = decoded_dump.messages
+
+        channels, data, msg_types = self._parse_messages(messages)
+
+        # default names if not defined in devicedb
+        for c in channels:
+            if c not in self.cmgr.channel_name_id_map.rights():
+                self.cmgr.channel_name_id_map.emplace("unnamed_channel"+str(c), c)
+
+        self.cmgr.channels = channels
+        self.cmgr.data = data
+        self.cmgr.msg_types = msg_types
+        self.cmgr.active_channels = list()
+        self.cmgr.traceDataChanged.emit()
+
     # load from binary file
     def _load_trace_clicked(self):
         asyncio.ensure_future(self._load_trace_task())
@@ -379,9 +421,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         try:
             with open(filename, 'rb') as f:
                 dump = f.read()
-            self.dump = dump
-            decoded_dump = decode_dump(dump)
-            self._parse_messages(decoded_dump.messages)
+            self._update_from_dump(dump)
         except:
             logger.error("Failed to parse binary trace file",
                          exc_info=True)
@@ -436,27 +476,26 @@ class WaveformDock(QtWidgets.QDockWidget):
             logger.info("ARTIQ dashboard connected to rtio analyzer (%s)",
                         self.rtio_addr)
 
+    @staticmethod 
+    def _sent_bytes_from_header(header):
+        if header[0] == ord('E'):
+            endian = '>'
+        elif header[0] == ord('e'):
+            endian = '<'
+        else:
+            raise ValueError
+        return struct.unpack(endian + "I", header[1:5])
+
     async def _receive_cr(self):
         try:
             while True:
                 header = await self._reader.read(16)
                 if not header:
                     return
-                if header[0] == ord('E'):
-                    endian = '>'
-                elif header[0] == ord('e'):
-                    endian = '<'
-                else:
-                    raise ValueError
-                print(header[1:16])
-                parts = struct.unpack(endian + "IQbbb", header[1:16])
-                (sent_bytes, total_byte_count,
-                 error_occurred, log_channel, dds_onehot_sel) = parts
+                sent_bytes = self._sent_bytes_from_header(header)
                 data = await self._reader.read(sent_bytes)
                 dump = header + data
-                decoded_dump = decode_dump(dump)
-                self.messages = decoded_dump.messages
-                self._parse_messages(self.messages)
+                self._update_from_dump(dump)
         except asyncio.CancelledError:
             raise
         except:
@@ -470,35 +509,6 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._writer.write(b"\x00") ## make separate coroutine
         # self._writer.write(b"\x01")
 
-    def _parse_messages(self, messages):
-        channels = set()
-        data = dict()
-        msg_types = dict()
-        for message in messages:
-            # get class name directly to avoid name conflict with comm_analyzer.MessageType
-            message_type = MessageType[message.__class__.__name__]
-            if message_type == MessageType.StoppedMessage:
-                break
-
-            c = message.channel
-            v = message_type.value
-
-            msg_types.setdefault(c, set())
-            data.setdefault(c, {})
-            data[c].setdefault(v, [])
-
-            channels.add(c)
-            msg_types[c].add(v)
-            data[c][v].append(message)
-        self.cmgr.channels = channels
-        self.cmgr.active_channels = list()
-        self.cmgr.data = data
-        self.cmgr.msg_types = msg_types
-        # default names if not defined in devicedb
-        for c in channels:
-            if c not in self.cmgr.channel_name_id_map.rights():
-                self.cmgr.channel_name_id_map.emplace("unnamed_channel"+str(c), c)
-        self.cmgr.traceDataChanged.emit()
     
     # connect to devicedb
     async def start(self, server, port):
