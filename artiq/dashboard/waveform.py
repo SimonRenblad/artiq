@@ -84,8 +84,7 @@ class ActiveChannelList(QtWidgets.QListWidget):
     def _selected_channel(self):
         item = self.currentItem()
         s = item.text()
-        c = self.cmgr.channel_name_id_map._0.get(s, s)
-        c = int(c)
+        c = self.cmgr.channel_name_id_map.get_by_left(s)
         return item, c
 
     def remove_channel(self):
@@ -108,8 +107,7 @@ class ActiveChannelList(QtWidgets.QListWidget):
 
     def add_channel(self, channel):
         self.addItem(channel)
-        channel = self.cmgr.channel_name_id_map._0.get(channel, channel)
-        channel = int(channel)
+        channel = self.cmgr.channel_name_id_map.get_by_left(channel)
         self.cmgr.active_channels.append(channel)
         self.cmgr.broadcast_active()
 
@@ -172,7 +170,7 @@ class AddChannelDialog(QtWidgets.QDialog):
     def update_channels(self):
         self.waveform_channel_list.clear()
         for channel in self.cmgr.channels:
-            name = self.cmgr.channel_name_id_map._1.get(channel, str(channel))
+            name = self.cmgr.channel_name_id_map.get_by_right(channel)
             self.waveform_channel_list.addItem(name)
 
 
@@ -249,12 +247,24 @@ class WaveformWidget(pg.PlotWidget):
 # convenience class
 class BijectiveMap:
     def __init__(self):
-        self._0 = dict()
-        self._1 = dict()
+        self._ltor = dict()
+        self._rtol = dict()
 
-    def emplace(self, first, second):
-        self._0[first] = second
-        self._1[second] = first
+    def emplace(self, left, right):
+        self._ltor[left] = right
+        self._rtol[right] = left
+
+    def get_by_left(self, left, default=None):
+        return self._ltor.get(left, default)
+
+    def get_by_right(self, right, default=None):
+        return self._rtol.get(right, default)
+
+    def lefts(self):
+        return self._ltor.keys()
+
+    def rights(self):
+        return self._rtol.keys()
 
 class ChannelManager(QtCore.QObject):
     activeChannelsChanged = QtCore.pyqtSignal()
@@ -305,7 +315,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.setObjectName("Waveform")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
                          QtWidgets.QDockWidget.DockWidgetFloatable)
-        self.channel_mgr = ChannelManager()
+        self.cmgr = ChannelManager()
         grid = LayoutWidget()
         self.setWidget(grid)
 
@@ -340,9 +350,9 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.coord_label = QtWidgets.QLabel("x: y: ")
         grid.addWidget(self.coord_label, 1, 2, colspan=10)
         
-        self.waveform_active_channel_view = ActiveChannelList(channel_mgr=self.channel_mgr)
+        self.waveform_active_channel_view = ActiveChannelList(channel_mgr=self.cmgr)
         grid.addWidget(self.waveform_active_channel_view, 2, 0, colspan=2)
-        self.waveform_widget = WaveformWidget(channel_mgr=self.channel_mgr) 
+        self.waveform_widget = WaveformWidget(channel_mgr=self.cmgr) 
         grid.addWidget(self.waveform_widget, 2, 2, colspan=10)
         self.waveform_widget.mouseMoved.connect(self.update_coord_label)
 
@@ -479,10 +489,14 @@ class WaveformDock(QtWidgets.QDockWidget):
             channels.add(c)
             msg_types[c].add(v)
             data[c][v].append(message)
-        self.channel_mgr.channels = channels
-        self.channel_mgr.data = data
-        self.channel_mgr.msg_types = msg_types
-        self.channel_mgr.traceDataChanged.emit()
+        self.cmgr.channels = channels
+        self.cmgr.data = data
+        self.cmgr.msg_types = msg_types
+        # default names if not defined in devicedb
+        for c in channels:
+            if c not in self.cmgr.channel_name_id_map.rights():
+                self.cmgr.channel_name_id_map.emplace("unnamed_channel"+str(c), c)
+        self.cmgr.traceDataChanged.emit()
     
     # connect to devicedb
     async def start(self, server, port):
@@ -514,7 +528,7 @@ class WaveformDock(QtWidgets.QDockWidget):
                 elif desc["type"] == "controller" and name == "core_analyzer":
                     self.rtio_addr = desc["host"]
                     self.rtio_port = desc.get("port_proxy", 1382)
-        self.channel_mgr.channel_name_id_map = channel_name_id_map
+        self.cmgr.channel_name_id_map = channel_name_id_map
 
     # handler for ccb
     def ccb_notify(self, message):
