@@ -72,6 +72,7 @@ class ActiveChannelList(QtWidgets.QListWidget):
         self.addAction(message_type_action)
         message_type_action.triggered.connect(self.display_message_type_filter)
 
+        self.cmgr.traceDataChanged.connect(self.clear)
         # Save list 
 #        save_list_action = QtWidgets.QAction("Save active list", self)
 #        self.addAction(save_list_action)
@@ -490,6 +491,7 @@ class WaveformDock(QtWidgets.QDockWidget):
             msg_types[c].add(v)
             data[c][v].append(message)
         self.cmgr.channels = channels
+        self.cmgr.active_channels = list()
         self.cmgr.data = data
         self.cmgr.msg_types = msg_types
         # default names if not defined in devicedb
