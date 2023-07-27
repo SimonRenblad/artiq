@@ -3,6 +3,7 @@ from PyQt5.QtCore import Qt
 
 from sipyco.keepalive import async_open_connection
 from sipyco.sync_struct import Subscriber
+from sipyco.pc_rpc import AsyncioClient
 from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
 from artiq.coredevice.comm_analyzer import decode_dump
 import numpy as np
@@ -14,6 +15,8 @@ import asyncio
 import struct
 from enum import Enum
 import time
+import atexit
+from artiq.tools import exc_to_warning
 
 import logging
 
@@ -252,7 +255,10 @@ class BijectiveMap:
         self._rtol = dict()
 
     def add(self, left, right):
-        del self._ltor[right]
+        if left in self._ltor:
+            del self._rtol[self._ltor[left]]
+        if right in self._rtol:
+            del self._ltor[self._rtol[right]]
         self._ltor[left] = right
         self._rtol[right] = left
 
@@ -314,6 +320,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.dump = None
         self.rtio_addr = None
         self.rtio_port = None
+        self.rtio_port_control = None
         self.setObjectName("Waveform")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
                          QtWidgets.QDockWidget.DockWidgetFloatable)
@@ -335,13 +342,6 @@ class WaveformDock(QtWidgets.QDockWidget):
         grid.addWidget(self.save_trace_button, 0, 1)
         self.save_trace_button.clicked.connect(self._save_trace_clicked)
 
-        self.sync_button = QtWidgets.QPushButton("Sync")
-        self.sync_button.setIcon(
-                QtWidgets.QApplication.style().standardIcon(
-                    QtWidgets.QStyle.SP_BrowserReload))
-        grid.addWidget(self.sync_button, 0, 2)
-        self.sync_button.clicked.connect(self._sync_proxy_clicked)
-
         self.pull_button = QtWidgets.QPushButton("Pull from device buffer")
         self.pull_button.setIcon(
                 QtWidgets.QApplication.style().standardIcon(
@@ -359,7 +359,10 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.waveform_widget.mouseMoved.connect(self.update_coord_label)
 
         self.subscriber = Subscriber("devices", self.init_ddb, self.update_ddb)
-        self._receive_task = None
+
+        self.proxy_client = AsyncioClient()
+        self.trace_subscriber = Subscriber("rtio_trace", self.init_dump, self.update_dump) 
+        self.proxy_connected = asyncio.Event()
 
     def update_coord_label(self, coord_x, coord_y):
         self.coord_label.setText(f"x: {coord_x} y: {coord_y}")
@@ -447,36 +450,16 @@ class WaveformDock(QtWidgets.QDockWidget):
             logger.error("Failed to save binary trace file",
                          exc_info=True)
 
-    # sync with proxy
-    def _sync_proxy_clicked(self):
-        asyncio.ensure_future(self._sync_proxy_task())
+    def init_dump(self, dump):
+        return dump
 
-    async def _sync_proxy_task(self):
-        # temp assumed variables
-        try:
-            self._reader, self._writer = await async_open_connection(
-                    host=self.rtio_addr,
-                    port=self.rtio_port,
-                    after_idle=1,
-                    interval=1,
-                    max_fails=3,
-                )
-            try:
-                self._writer.write(b"ARTIQ rtio analyzer\n")
-                self._receive_task = asyncio.ensure_future(self._receive_cr())
-            except:
-                self._writer.close()
-                del self._reader
-                del self._writer
-                raise
-        except asyncio.CancelledError:
-            logger.info("cancelled connection to rtio analyzer")
-        except:
-            logger.error("failed to connect to rtio analyzer. Is artiq_rtio_proxy running?", exc_info=True)
-        else:
-            logger.info("ARTIQ dashboard connected to rtio analyzer (%s)",
-                        self.rtio_addr)
-
+    def update_dump(self, mod):
+        print(mod)
+        dump = mod.get("data", None)
+        if dump:
+            logger.info("calling update from dump")
+            self._update_from_dump(d)
+    
     @staticmethod 
     def _sent_bytes_from_header(header):
         if header[0] == ord('E'):
@@ -486,47 +469,41 @@ class WaveformDock(QtWidgets.QDockWidget):
         else:
             raise ValueError
         return struct.unpack(endian + "I", header[1:5])[0]
-
-    async def _receive_cr(self):
-        try:
-            while True:
-                header = await self._reader.read(16)
-                if not header:
-                    return
-                sent_bytes = self._sent_bytes_from_header(header)
-                data = await self._reader.read(sent_bytes)
-                dump = header + data
-                self._update_from_dump(dump)
-        except asyncio.CancelledError:
-            raise
-        except:
-            logger.error("Moninj connection terminating with exception", exc_info=True)
     
     # pull data from device buffer
     def _pull_from_device_clicked(self):
         asyncio.ensure_future(self._pull_from_device_task())
 
     async def _pull_from_device_task(self):
-        self._writer.write(b"\x00") ## make separate coroutine
-        # self._writer.write(b"\x01")
-
+        if not self.proxy_connected:
+            logger.error("Cannot pull from device, proxy is not connected")
+            return
+        try:
+            logger.info("attempt pull from device")
+            asyncio.ensure_future(exc_to_warning(self.proxy_client.pull_from_device()))
+        except:
+            logger.error("Pull from device failed, is proxy running?", exc_info=1)
     
     # connect to devicedb
     async def start(self, server, port):
-        await self.subscriber.connect(server, port)
+        try:
+            await self.subscriber.connect(server, port)
+            await self.proxy_connected.wait()
+            await self.proxy_client.connect_rpc(self.rtio_addr, self.rtio_port_control, "rtio_proxy_control")
+            await self.trace_subscriber.connect(self.rtio_addr, self.rtio_port)
+        except TimeoutError:
+            logger.error("Unable to reach master")
+            return
+        except:
+            logger.error("other exception", exc_info=1)
 
     async def stop(self):
-        await self.subscriber.close()
-        if self._receive_task is not None:
-            self._receive_task.cancel()
-            try:
-                await asyncio.wait_for(self._receive_task, None)
-            except asyncio.CancelledError:
-                pass
-            finally:
-                self._writer.close()
-                del self._reader
-                del self._writer
+        try:
+            await self.subscriber.close()
+            self.proxy_client.close_rpc()
+            await self.trace_subscriber.close()
+        except:
+            logger.error("Error closing proxy connections", exc_info=1)
 
     def init_ddb(self, ddb):
         self.ddb = ddb
@@ -537,18 +514,22 @@ class WaveformDock(QtWidgets.QDockWidget):
             if isinstance(desc, dict):
                 if "arguments" in desc and "channel" in desc["arguments"] and desc["type"] == "local":
                     channel = desc["arguments"]["channel"]
+                    print(name, channel)
                     channel_name_id_map.add(name, channel)
                 elif desc["type"] == "controller" and name == "core_analyzer":
                     self.rtio_addr = desc["host"]
                     self.rtio_port = desc.get("port_proxy", 1382)
+                    self.rtio_port_control = desc.get("port_proxy_control", 1385)
         self.cmgr.channel_name_id_map = channel_name_id_map
+        if self.rtio_addr is not None:
+            self.proxy_connected.set()
 
     # handler for ccb
     def ccb_notify(self, message):
         try:
             service = message["service"]
             if service == "show_trace":
-                asyncio.ensure_future(self._sync_proxy_task())
+                pass # TODO: pull source data from device
         except:
             logger.error("failed to process CCB", exc_info=True)
 

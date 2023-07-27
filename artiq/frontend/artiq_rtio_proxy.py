@@ -2,68 +2,25 @@ import argparse
 import asyncio
 from sipyco.asyncio_tools import AsyncioServer, SignalHandler
 from sipyco.pc_rpc import Server
+from sipyco.sync_struct import Notifier, Publisher
 from sipyco import common_args
 
 from artiq.coredevice.comm_analyzer import get_analyzer_dump
 
-# 1382 is default port for core analyzer 
-# 1385 is not a port taken by defaults -> recommend for this
-
-class ProxyConnection:
-    def __init__(self, reader, writer, host, port, cached_dump):
-        self.reader = reader
-        self.writer = writer
-        self.host = host
-        self.port = port
-        self.cached_dump = cached_dump
-
-    # naive version read smth -> writes back synchronously
-    async def handle(self):
-        while True:
-            ty = await self.reader.read(1) # read 1 byte
-            if ty == b"\x01" or self.cached_dump["data"] is None:
-                dump = b"Hello World!\n"
-                with open("dump2.bin", "rb") as f:
-                    dump = f.read()
-                self.cached_dump["data"] = dump
-            self.writer.write(self.cached_dump["data"])
-            await self.writer.drain()
-
-
-# Proxy the core analyzer
-class ProxyServer(AsyncioServer):
-    def __init__(self, host, port=1382):
-        AsyncioServer.__init__(self)
-        self.host = host
-        self.port = port
-        self.cached_dump = {"data": None}
-
-    async def _handle_connection_cr(self, reader, writer):
-        line = await reader.readline()
-        if line != b"ARTIQ rtio analyzer\n":
-            logger.error("incorrect magic")
-            return
-        await ProxyConnection(reader, writer, self.host, self.port, self.cached_dump).handle()
-
-
-class PingTarget:
-    def ping(self):
-        return True
+import inspect
 
 class RTIOAnalyzerControl:
     def __init__(self, host, port):
         self.host = host
         self.port = port
-        self.underlying = {}
-        self.data = Notifier(self.underlying)
+        self.data = dict()
+        self.notifier = Notifier(self.data)
 
     # rpc to pull from device
     def pull_from_device(self):
         # dump = get_analyzer_dump(self.host, self.port)
-        dump = b""
-        with open("dump2.bin", "rb") as f:
-            dump = f.read()
-        setattr(self.data, "data", dump) # calls the notifies
+        dump = b"Hello World"
+        self.notifier["data"] = dump
 
 def get_argparser():
     parser = argparse.ArgumentParser(
@@ -91,23 +48,23 @@ def main():
         signal_handler = SignalHandler() # handles Ctrl-C and terminate signals
         signal_handler.setup()
         try:
-            device
-            proxy_server = ProxyServer(args.core_addr)
-            loop.run_until_complete(proxy_server.start(bind_address, args.port_proxy))
+            rtio_analyzer_control = RTIOAnalyzerControl(args.core_addr, args.port_proxy)
+            dump_publisher = Publisher({"rtio_trace": rtio_analyzer_control.notifier})  
+            loop.run_until_complete(dump_publisher.start(bind_address, args.port_proxy))
             try:
-                server = Server({"rtio_analyzer_proxy": PingTarget()}, None, True)
+                server = Server({"rtio_proxy_control": rtio_analyzer_control}, None, True)
                 loop.run_until_complete(server.start(bind_address, args.port_control))
                 try:
                     _, pending = loop.run_until_complete(asyncio.wait(
                         [loop.create_task(signal_handler.wait_terminate()),
-                         loop.create_task(server.wait_terminate())], # EDIT << 
+                         loop.create_task(server.wait_terminate())],
                         return_when=asyncio.FIRST_COMPLETED))
                     for task in pending:
                         task.cancel()
                 finally:
                     loop.run_until_complete(server.stop())
             finally:
-                loop.run_until_complete(proxy_server.stop())
+                loop.run_until_completed(dump_publisher.stop())
         finally:
             signal_handler.teardown()
     finally:
