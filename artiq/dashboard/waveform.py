@@ -274,7 +274,7 @@ class BijectiveMap:
     def rights(self):
         return self._rtol.keys()
 
-class ChannelManager(QtCore.QObject):
+class _ChannelManager(QtCore.QObject):
     activeChannelsChanged = QtCore.pyqtSignal()
     traceDataChanged = QtCore.pyqtSignal()
 
@@ -314,58 +314,18 @@ class ChannelManager(QtCore.QObject):
         self.broadcast_active()
 
 
-class WaveformDock(QtWidgets.QDockWidget):
-    def __init__(self):
-        QtWidgets.QDockWidget.__init__(self, "Waveform")
-        self.dump = None
+class _TraceManager:
+    def __init__(self, parent, channel_mgr):
+        self.parent = parent
+        self.cmgr = channel_mgr
         self.rtio_addr = None
         self.rtio_port = None
         self.rtio_port_control = None
-        self.setObjectName("Waveform")
-        self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
-                         QtWidgets.QDockWidget.DockWidgetFloatable)
-        self.cmgr = ChannelManager()
-        grid = LayoutWidget()
-        self.setWidget(grid)
-
-        self.load_trace_button = QtWidgets.QPushButton("Load Trace")
-        self.load_trace_button.setIcon(
-                QtWidgets.QApplication.style().standardIcon(
-                    QtWidgets.QStyle.SP_DialogOpenButton))
-        grid.addWidget(self.load_trace_button, 0, 0)
-        self.load_trace_button.clicked.connect(self._load_trace_clicked)
-
-        self.save_trace_button = QtWidgets.QPushButton("Save Trace")
-        self.save_trace_button.setIcon(
-                QtWidgets.QApplication.style().standardIcon(
-                    QtWidgets.QStyle.SP_DriveFDIcon))
-        grid.addWidget(self.save_trace_button, 0, 1)
-        self.save_trace_button.clicked.connect(self._save_trace_clicked)
-
-        self.pull_button = QtWidgets.QPushButton("Pull from device buffer")
-        self.pull_button.setIcon(
-                QtWidgets.QApplication.style().standardIcon(
-                    QtWidgets.QStyle.SP_ArrowUp))
-        grid.addWidget(self.pull_button, 0, 3)
-        self.pull_button.clicked.connect(self._pull_from_device_clicked)
-
-        self.coord_label = QtWidgets.QLabel("x: y: ")
-        grid.addWidget(self.coord_label, 1, 2, colspan=10)
-        
-        self.waveform_active_channel_view = ActiveChannelList(channel_mgr=self.cmgr)
-        grid.addWidget(self.waveform_active_channel_view, 2, 0, colspan=2)
-        self.waveform_widget = WaveformWidget(channel_mgr=self.cmgr) 
-        grid.addWidget(self.waveform_widget, 2, 2, colspan=10)
-        self.waveform_widget.mouseMoved.connect(self.update_coord_label)
-
+        self.dump = None
         self.subscriber = Subscriber("devices", self.init_ddb, self.update_ddb)
-
         self.proxy_client = AsyncioClient()
         self.trace_subscriber = Subscriber("rtio_trace", self.init_dump, self.update_dump) 
-        self.proxy_connected = asyncio.Event()
-
-    def update_coord_label(self, coord_x, coord_y):
-        self.coord_label.setText(f"x: {coord_x} y: {coord_y}")
+        self.proxy_reconnect = asyncio.Event()
 
     # parsing and loading dump
     @staticmethod
@@ -409,10 +369,6 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.cmgr.active_channels = list()
         self.cmgr.traceDataChanged.emit()
 
-    # load from binary file
-    def _load_trace_clicked(self):
-        asyncio.ensure_future(self._load_trace_task())
-
     async def _load_trace_task(self):
         try:
             filename = await get_open_file_name(
@@ -429,10 +385,6 @@ class WaveformDock(QtWidgets.QDockWidget):
         except:
             logger.error("Failed to parse binary trace file",
                          exc_info=True)
-
-    # save to binary file
-    def _save_trace_clicked(self):
-        asyncio.ensure_future(self._save_trace_task())
 
     async def _save_trace_task(self):
         try:
@@ -454,11 +406,10 @@ class WaveformDock(QtWidgets.QDockWidget):
         return dump
 
     def update_dump(self, mod):
-        print(mod)
-        dump = mod.get("data", None)
+        dump = mod.get("value", None)
         if dump:
             logger.info("calling update from dump")
-            self._update_from_dump(d)
+            self._update_from_dump(dump)
     
     @staticmethod 
     def _sent_bytes_from_header(header):
@@ -469,33 +420,27 @@ class WaveformDock(QtWidgets.QDockWidget):
         else:
             raise ValueError
         return struct.unpack(endian + "I", header[1:5])[0]
-    
-    # pull data from device buffer
-    def _pull_from_device_clicked(self):
-        asyncio.ensure_future(self._pull_from_device_task())
 
     async def _pull_from_device_task(self):
-        if not self.proxy_connected:
-            logger.error("Cannot pull from device, proxy is not connected")
-            return
         try:
             logger.info("attempt pull from device")
             asyncio.ensure_future(exc_to_warning(self.proxy_client.pull_from_device()))
         except:
             logger.error("Pull from device failed, is proxy running?", exc_info=1)
     
-    # connect to devicedb
+    # change to a loop that waits on proxy_reconnect
     async def start(self, server, port):
         try:
             await self.subscriber.connect(server, port)
-            await self.proxy_connected.wait()
+            await self.proxy_reconnect.wait()
             await self.proxy_client.connect_rpc(self.rtio_addr, self.rtio_port_control, "rtio_proxy_control")
             await self.trace_subscriber.connect(self.rtio_addr, self.rtio_port)
         except TimeoutError:
-            logger.error("Unable to reach master")
-            return
+            logger.error("Time out", exc_info=1)
         except:
             logger.error("other exception", exc_info=1)
+        finally:
+            self.proxy_reconnect.clear()
 
     async def stop(self):
         try:
@@ -522,14 +467,74 @@ class WaveformDock(QtWidgets.QDockWidget):
                     self.rtio_port_control = desc.get("port_proxy_control", 1385)
         self.cmgr.channel_name_id_map = channel_name_id_map
         if self.rtio_addr is not None:
-            self.proxy_connected.set()
+            self.proxy_reconnect.set()
 
     # handler for ccb
     def ccb_notify(self, message):
         try:
             service = message["service"]
-            if service == "show_trace":
-                pass # TODO: pull source data from device
+            if service == "pull_trace_from_device":
+                asyncio.ensure_future(exc_to_warning(self.proxy_client.pull_from_device()))
         except:
             logger.error("failed to process CCB", exc_info=True)
+
+class WaveformDock(QtWidgets.QDockWidget):
+    def __init__(self):
+        QtWidgets.QDockWidget.__init__(self, "Waveform")
+        self.setObjectName("Waveform")
+        self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
+                         QtWidgets.QDockWidget.DockWidgetFloatable)
+
+        self.cmgr = _ChannelManager()
+        self.tm = _TraceManager(parent=self, channel_mgr=self.cmgr)
+
+        grid = LayoutWidget()
+        self.setWidget(grid)
+
+        self.load_trace_button = QtWidgets.QPushButton("Load Trace")
+        self.load_trace_button.setIcon(
+                QtWidgets.QApplication.style().standardIcon(
+                    QtWidgets.QStyle.SP_DialogOpenButton))
+        grid.addWidget(self.load_trace_button, 0, 0)
+        self.load_trace_button.clicked.connect(self._load_trace_clicked)
+
+        self.save_trace_button = QtWidgets.QPushButton("Save Trace")
+        self.save_trace_button.setIcon(
+                QtWidgets.QApplication.style().standardIcon(
+                    QtWidgets.QStyle.SP_DriveFDIcon))
+        grid.addWidget(self.save_trace_button, 0, 1)
+        self.save_trace_button.clicked.connect(self._save_trace_clicked)
+
+        self.pull_button = QtWidgets.QPushButton("Pull from device buffer")
+        self.pull_button.setIcon(
+                QtWidgets.QApplication.style().standardIcon(
+                    QtWidgets.QStyle.SP_ArrowUp))
+        grid.addWidget(self.pull_button, 0, 3)
+        self.pull_button.clicked.connect(self._pull_from_device_clicked)
+
+        self.coord_label = QtWidgets.QLabel("x: y: ")
+        grid.addWidget(self.coord_label, 1, 2, colspan=10)
+        
+        self.waveform_active_channel_view = ActiveChannelList(channel_mgr=self.cmgr)
+        grid.addWidget(self.waveform_active_channel_view, 2, 0, colspan=2)
+        self.waveform_widget = WaveformWidget(channel_mgr=self.cmgr) 
+        grid.addWidget(self.waveform_widget, 2, 2, colspan=10)
+        self.waveform_widget.mouseMoved.connect(self.update_coord_label)
+
+
+    def update_coord_label(self, coord_x, coord_y):
+        self.coord_label.setText(f"x: {coord_x} y: {coord_y}")
+
+    # load from binary file
+    def _load_trace_clicked(self):
+        asyncio.ensure_future(self.tm._load_trace_task())
+
+    # save to binary file
+    def _save_trace_clicked(self):
+        asyncio.ensure_future(self.tm._save_trace_task())
+    
+    # pull data from device buffer
+    def _pull_from_device_clicked(self):
+        asyncio.ensure_future(self.tm._pull_from_device_task())
+
 
