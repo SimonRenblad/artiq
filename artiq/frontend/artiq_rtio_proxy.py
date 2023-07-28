@@ -9,6 +9,7 @@ from artiq.coredevice.comm_analyzer import get_analyzer_dump
 
 import inspect
 
+# Turn into proxy interface
 class RTIOAnalyzerControl:
     def __init__(self, host, port):
         self.host = host
@@ -20,6 +21,8 @@ class RTIOAnalyzerControl:
     def pull_from_device(self):
         # dump = get_analyzer_dump(self.host, self.port)
         dump = b"Hello World"
+        with open("dump2.bin", "rb") as f:
+            dump = f.read()
         self.notifier["data"] = dump
 
 def get_argparser():
