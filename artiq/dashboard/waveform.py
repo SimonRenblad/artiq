@@ -315,9 +315,10 @@ class _ChannelManager(QtCore.QObject):
 
 
 class _TraceManager:
-    def __init__(self, parent, channel_mgr):
+    def __init__(self, parent, channel_mgr, loop):
         self.parent = parent
         self.cmgr = channel_mgr
+        self._loop = loop
         self.rtio_addr = None
         self.rtio_port = None
         self.rtio_port_control = None
@@ -326,6 +327,7 @@ class _TraceManager:
         self.proxy_client = AsyncioClient()
         self.trace_subscriber = Subscriber("rtio_trace", self.init_dump, self.update_dump) 
         self.proxy_reconnect = asyncio.Event()
+        self.reconnect_task = None
 
     # parsing and loading dump
     @staticmethod
@@ -428,19 +430,32 @@ class _TraceManager:
         except:
             logger.error("Pull from device failed, is proxy running?", exc_info=1)
     
-    # change to a loop that waits on proxy_reconnect
     async def start(self, server, port):
+        # non-blocking, with loop to attach Subscriber and AsyncioClient
+        self.reconnect_task = asyncio.ensure_future(self.reconnect(server, port), loop = self._loop)
         try:
             await self.subscriber.connect(server, port)
-            await self.proxy_reconnect.wait()
-            await self.proxy_client.connect_rpc(self.rtio_addr, self.rtio_port_control, "rtio_proxy_control")
-            await self.trace_subscriber.connect(self.rtio_addr, self.rtio_port)
-        except TimeoutError:
-            logger.error("Time out", exc_info=1)
         except:
             logger.error("other exception", exc_info=1)
-        finally:
+
+    async def reconnect(self):
+        # perform looping here
+        while True:
+            await self.proxy_reconnect.wait()
             self.proxy_reconnect.clear()
+            try:
+                self.proxy_client.close_rpc()
+                await self.trace_subscriber.close()
+            except:
+                pass # will throw if not alive to begin with
+            try:
+                await self.proxy_client.connect_rpc(self.rtio_addr, self.rtio_port_control, "rtio_proxy_control")
+                await self.trace_subscriber.connect(self.rtio_addr, self.rtio_port)
+            except TimeoutError:
+                await asyncio.sleep(5)
+                self.proxy_reconnect.set()
+            except:
+                logger.error("other exception", exc_info=1)
 
     async def stop(self):
         try:
@@ -479,14 +494,14 @@ class _TraceManager:
             logger.error("failed to process CCB", exc_info=True)
 
 class WaveformDock(QtWidgets.QDockWidget):
-    def __init__(self):
+    def __init__(self, loop=None):
         QtWidgets.QDockWidget.__init__(self, "Waveform")
         self.setObjectName("Waveform")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
                          QtWidgets.QDockWidget.DockWidgetFloatable)
 
         self.cmgr = _ChannelManager()
-        self.tm = _TraceManager(parent=self, channel_mgr=self.cmgr)
+        self.tm = _TraceManager(parent=self, channel_mgr=self.cmgr, loop=loop)
 
         grid = LayoutWidget()
         self.setWidget(grid)
