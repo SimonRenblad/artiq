@@ -525,11 +525,11 @@ class WaveformDock(QtWidgets.QDockWidget):
         grid.addWidget(self.save_trace_button, 0, 1)
         self.save_trace_button.clicked.connect(self._save_trace_clicked)
 
-        self.pull_button = QtWidgets.QPushButton("Pull from device buffer")
+        self.pull_button = QtWidgets.QPushButton("Pull from Device Buffer")
         self.pull_button.setIcon(
                 QtWidgets.QApplication.style().standardIcon(
                     QtWidgets.QStyle.SP_ArrowUp))
-        grid.addWidget(self.pull_button, 0, 3)
+        grid.addWidget(self.pull_button, 0, 2)
         self.pull_button.clicked.connect(self._pull_from_device_clicked)
 
         self.coord_label = QtWidgets.QLabel("x: y: ")
