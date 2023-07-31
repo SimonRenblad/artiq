@@ -403,43 +403,42 @@ class _TraceManager:
         except:
             logger.error("Failed to save binary trace file",
                          exc_info=True)
+            
+   # @staticmethod 
+   # def _sent_bytes_from_header(header):
+   #     if header[0] == ord('E'):
+   #         endian = '>'
+   #     elif header[0] == ord('e'):
+   #         endian = '<'
+   #     else:
+   #         raise ValueError
+   #     return struct.unpack(endian + "I", header[1:5])[0]
 
+    async def _pull_from_device_task(self):
+        try:
+            asyncio.ensure_future(exc_to_warning(self.proxy_client.pull_from_device()))
+        except:
+            logger.error("Pull from device failed, is proxy running?", exc_info=1)
+
+    # Proxy subscriber callbacks
     def init_dump(self, dump):
         return dump
 
     def update_dump(self, mod):
         dump = mod.get("value", None)
         if dump:
-            logger.info("calling update from dump")
             self._update_from_dump(dump)
-    
-    @staticmethod 
-    def _sent_bytes_from_header(header):
-        if header[0] == ord('E'):
-            endian = '>'
-        elif header[0] == ord('e'):
-            endian = '<'
-        else:
-            raise ValueError
-        return struct.unpack(endian + "I", header[1:5])[0]
-
-    async def _pull_from_device_task(self):
-        try:
-            logger.info("attempt pull from device")
-            asyncio.ensure_future(exc_to_warning(self.proxy_client.pull_from_device()))
-        except:
-            logger.error("Pull from device failed, is proxy running?", exc_info=1)
-    
+   
+    # Proxy client connections
     async def start(self, server, port):
         # non-blocking, with loop to attach Subscriber and AsyncioClient
-        self.reconnect_task = asyncio.ensure_future(self.reconnect(server, port), loop = self._loop)
+        self.reconnect_task = asyncio.ensure_future(self.reconnect(), loop = self._loop)
         try:
             await self.subscriber.connect(server, port)
         except:
-            logger.error("other exception", exc_info=1)
+            logger.error("Failed to connect to master.", exc_info=1)
 
     async def reconnect(self):
-        # perform looping here
         while True:
             await self.proxy_reconnect.wait()
             self.proxy_reconnect.clear()
@@ -447,7 +446,7 @@ class _TraceManager:
                 self.proxy_client.close_rpc()
                 await self.trace_subscriber.close()
             except:
-                pass # will throw if not alive to begin with
+                pass # will throw if not connected
             try:
                 await self.proxy_client.connect_rpc(self.rtio_addr, self.rtio_port_control, "rtio_proxy_control")
                 await self.trace_subscriber.connect(self.rtio_addr, self.rtio_port)
@@ -455,16 +454,22 @@ class _TraceManager:
                 await asyncio.sleep(5)
                 self.proxy_reconnect.set()
             except:
-                logger.error("other exception", exc_info=1)
+                logger.error("Proxy reconnect failed, is proxy running?", exc_info=1)
 
     async def stop(self):
+        self.reconnect_task.cancel()
+        try:
+            await asyncio.wait_for(self.reconnect_task, None)
+        except asyncio.CancelledError:
+            pass
         try:
             await self.subscriber.close()
             self.proxy_client.close_rpc()
             await self.trace_subscriber.close()
         except:
             logger.error("Error closing proxy connections", exc_info=1)
-
+    
+    # DeviceDB subscriber callbacks
     def init_ddb(self, ddb):
         self.ddb = ddb
 
@@ -484,7 +489,7 @@ class _TraceManager:
         if self.rtio_addr is not None:
             self.proxy_reconnect.set()
 
-    # handler for ccb
+    # Experiment and applet handler
     def ccb_notify(self, message):
         try:
             service = message["service"]
