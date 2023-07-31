@@ -479,7 +479,6 @@ class _TraceManager:
             if isinstance(desc, dict):
                 if "arguments" in desc and "channel" in desc["arguments"] and desc["type"] == "local":
                     channel = desc["arguments"]["channel"]
-                    print(name, channel)
                     channel_name_id_map.add(name, channel)
                 elif desc["type"] == "controller" and name == "core_analyzer":
                     self.rtio_addr = desc["host"]
@@ -532,8 +531,13 @@ class WaveformDock(QtWidgets.QDockWidget):
         grid.addWidget(self.pull_button, 0, 2)
         self.pull_button.clicked.connect(self._pull_from_device_clicked)
 
-        self.coord_label = QtWidgets.QLabel("x: y: ")
-        grid.addWidget(self.coord_label, 1, 2, colspan=10)
+        self.x_coord_label = QtWidgets.QLabel("x:")
+        self.x_coord_label.setFont(QtGui.QFont("Monospace", 10))
+        grid.addWidget(self.x_coord_label, 1, 2, colspan=1)
+
+        self.y_coord_label = QtWidgets.QLabel("y:")
+        self.y_coord_label.setFont(QtGui.QFont("Monospace", 10))
+        grid.addWidget(self.y_coord_label, 1, 3, colspan=9)
         
         self.waveform_active_channel_view = ActiveChannelList(channel_mgr=self.cmgr)
         grid.addWidget(self.waveform_active_channel_view, 2, 0, colspan=2)
@@ -543,7 +547,8 @@ class WaveformDock(QtWidgets.QDockWidget):
 
 
     def update_coord_label(self, coord_x, coord_y):
-        self.coord_label.setText(f"x: {coord_x} y: {coord_y}")
+        self.x_coord_label.setText(f"x: {coord_x:.10g}")
+        self.y_coord_label.setText(f"y: {coord_y:.10g}")
 
     # load from binary file
     def _load_trace_clicked(self):
