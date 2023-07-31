@@ -9,7 +9,7 @@ from artiq.coredevice.comm_analyzer import get_analyzer_dump
 
 import inspect
 
-# Turn into proxy interface
+
 class RTIOAnalyzerControl:
     def __init__(self, host, port):
         self.host = host
@@ -17,13 +17,22 @@ class RTIOAnalyzerControl:
         self.data = dict()
         self.notifier = Notifier(self.data)
 
-    # rpc to pull from device
     def pull_from_device(self):
-        # dump = get_analyzer_dump(self.host, self.port)
+        dump = get_analyzer_dump(self.host, self.port)
+        self.notifier["data"] = dump
+
+# Simulated data for testing
+class DummyControl:
+    def __init__(self):
+        self.data = dict()
+        self.notifier = Notifier(self.data)
+
+    def pull_from_device(self):
         dump = b"Hello World"
         with open("dump2.bin", "rb") as f:
             dump = f.read()
         self.notifier["data"] = dump
+
 
 def get_argparser():
     parser = argparse.ArgumentParser(
@@ -33,9 +42,9 @@ def get_argparser():
         ("proxy", "proxying", 1382),
         ("control", "control", 1385)
     ])
-    #parser.add_argument("--simulation", action="store_true",
-    #                    help="Simulation - does not connect to device")
-    parser.add_argument("core_addr", metavar="CORE_ADDR",
+    parser.add_argument("--simulation", action="store_true",
+                        help="Simulation - does not connect to device")
+    parser.add_argument("--core_addr", metavar="CORE_ADDR", default=None,
                         help="hostname or IP address of the core device")
     return parser
 
@@ -51,7 +60,12 @@ def main():
         signal_handler = SignalHandler() # handles Ctrl-C and terminate signals
         signal_handler.setup()
         try:
-            rtio_analyzer_control = RTIOAnalyzerControl(args.core_addr, args.port_proxy)
+            rtio_analyzer_control = None
+            if args.simulation or args.core_addr is None:
+                print("INFO: Proxy simulating device buffer...")
+                rtio_analyzer_control = DummyControl()
+            else:
+                rtio_analyzer_control = RTIOAnalyzerControl(args.core_addr, args.port_proxy)
             dump_publisher = Publisher({"rtio_trace": rtio_analyzer_control.notifier})  
             loop.run_until_complete(dump_publisher.start(bind_address, args.port_proxy))
             try:
