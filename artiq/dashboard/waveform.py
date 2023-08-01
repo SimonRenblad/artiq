@@ -74,41 +74,41 @@ class _ChannelDisplaySettingsDialog(QtWidgets.QDialog):
         grid.setColumnMinimumWidth(2, 60)
         self.setLayout(grid)
 
-        self.output_visible = QtWidgets.QCheckBox("OutputMessage") 
-        self.input_visible = QtWidgets.QCheckBox("InputMessage") 
-        self.exception_visible = QtWidgets.QCheckBox("ExceptionMessage")
-
-        grid.addWidget(self.output_visible, 0, 0)
-        grid.addWidget(self.input_visible, 1, 0)
-        grid.addWidget(self.exception_visible, 2, 0)
-
-        self.displaytype_out = QtWidgets.QComboBox()
-        self.displaytype_out.addItems(["INT_64", "FLOAT_64"])
-        self.displaytype_in = QtWidgets.QComboBox()
-        self.displaytype_in.addItems(["INT_64", "FLOAT_64"])
-
-        grid.addWidget(self.displaytype_out, 0, 1)
-        grid.addWidget(self.displaytype_in, 1, 1)
-
         msg_types = self.cmgr.msg_types[self.channel]
+        
+        self.output_visible = QtWidgets.QCheckBox("OutputMessage") 
         if MessageType.OutputMessage in msg_types:
             self.output_visible.setChecked(True)
+        grid.addWidget(self.output_visible, 0, 0)
+        
+        self.input_visible = QtWidgets.QCheckBox("InputMessage") 
         if MessageType.InputMessage in msg_types:
             self.input_visible.setChecked(True)
+        grid.addWidget(self.input_visible, 1, 0)
+
+        self.exception_visible = QtWidgets.QCheckBox("ExceptionMessage")
         if MessageType.ExceptionMessage in msg_types:
             self.exception_visible.setChecked(True)
+        grid.addWidget(self.exception_visible, 2, 0)
 
         display_types = self.cmgr.display_types[self.channel]
+       
+        self.displaytype_out = QtWidgets.QComboBox()
+        self.displaytype_out.addItems(["INT_64", "FLOAT_64"])
         self.displaytype_out.setCurrentIndex(display_types[0].value)
+        grid.addWidget(self.displaytype_out, 0, 1)
+
+        self.displaytype_in = QtWidgets.QComboBox()
+        self.displaytype_in.addItems(["INT_64", "FLOAT_64"])
         self.displaytype_in.setCurrentIndex(display_types[1].value)
-        
+        grid.addWidget(self.displaytype_in, 1, 1)
+
         self.cancel = QtWidgets.QPushButton("Cancel")
         self.cancel.clicked.connect(self.close)
+        grid.addWidget(self.cancel, 3, 0)
 
         self.confirm = QtWidgets.QPushButton("Confirm")
         self.confirm.clicked.connect(self._confirm_filter)
-
-        grid.addWidget(self.cancel, 3, 0)
         grid.addWidget(self.confirm, 3, 1)
     
     def _confirm_filter(self):
@@ -151,7 +151,8 @@ class ActiveChannelList(QtWidgets.QListWidget):
         # Message type to display
         message_type_action = QtWidgets.QAction("Display channel settings...", self)
         self.addAction(message_type_action)
-        message_type_action.triggered.connect(self._display_message_type_filter)
+        message_type_action.triggered.connect(self._display_channel_settings)
+        self.itemDoubleClicked.connect(lambda item: self._display_channel_settings())
 
         # Save list 
         save_list_action = QtWidgets.QAction("Save active list...", self)
@@ -169,7 +170,6 @@ class ActiveChannelList(QtWidgets.QListWidget):
         self.addAction(remove_channel)
 
         self.cmgr.traceDataChanged.connect(self.clear)
-        self.itemDoubleClicked.connect(lambda item: self._display_message_type_filter())
 
     async def _save_list_task(self):
         try:
@@ -215,7 +215,7 @@ class ActiveChannelList(QtWidgets.QListWidget):
         c = self.cmgr.channel_name_id_map.get_by_left(s)
         return item, c
 
-    def _display_message_type_filter(self):
+    def _display_channel_settings(self):
         item, channel = self._selected_channel()
         dialog = _ChannelDisplaySettingsDialog(self, 
                                          channel_mgr=self.cmgr,
