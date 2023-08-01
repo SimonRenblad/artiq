@@ -127,7 +127,7 @@ class _ChannelDisplaySettingsDialog(QtWidgets.QDialog):
         self.close()
 
 
-class ActiveChannelList(QtWidgets.QListWidget):
+class _ActiveChannelList(QtWidgets.QListWidget):
 
     def __init__(self, channel_mgr):
         QtWidgets.QListWidget.__init__(self)
@@ -171,6 +171,7 @@ class ActiveChannelList(QtWidgets.QListWidget):
 
         self.cmgr.traceDataChanged.connect(self.clear)
 
+    # TODO: Save with better data settings
     async def _save_list_task(self):
         try:
             filename = await get_save_file_name(
@@ -235,7 +236,7 @@ class ActiveChannelList(QtWidgets.QListWidget):
         self.cmgr.broadcast_active()
 
 
-class WaveformWidget(pg.PlotWidget):
+class _WaveformWidget(pg.PlotWidget):
     mouseMoved = QtCore.pyqtSignal(float, float)
 
     def __init__(self, parent=None, channel_mgr=None):
@@ -271,7 +272,7 @@ class WaveformWidget(pg.PlotWidget):
                 self._display_waveform(channel, msg_type)
     
     @staticmethod
-    def convert_type(data, display_type):
+    def _convert_type(data, display_type):
         if display_type == DisplayType.INT_64:
             return data
         if display_type == DisplayType.FLOAT_64:
@@ -291,7 +292,7 @@ class WaveformWidget(pg.PlotWidget):
         if msg_type in [MessageType.OutputMessage, MessageType.InputMessage]:
             display_type = self.cmgr.display_types[channel][msg_type.value]
             for i, y in enumerate(data):
-                y_data[i] = self.convert_type(y.data, display_type)
+                y_data[i] = self._convert_type(y.data, display_type)
             pen = {'color': msg_type.value, 'width': 1}
         else:
             symbol = 'x'
@@ -574,12 +575,11 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.y_coord_label.setFont(QtGui.QFont("Monospace", 10))
         grid.addWidget(self.y_coord_label, 1, 3, colspan=9)
         
-        self.waveform_active_channel_view = ActiveChannelList(channel_mgr=self.cmgr)
+        self.waveform_active_channel_view = _ActiveChannelList(channel_mgr=self.cmgr)
         grid.addWidget(self.waveform_active_channel_view, 2, 0, colspan=2)
-        self.waveform_widget = WaveformWidget(channel_mgr=self.cmgr) 
+        self.waveform_widget = _WaveformWidget(channel_mgr=self.cmgr) 
         grid.addWidget(self.waveform_widget, 2, 2, colspan=10)
         self.waveform_widget.mouseMoved.connect(self.update_coord_label)
-
 
     def update_coord_label(self, coord_x, coord_y):
         self.x_coord_label.setText(f"x: {coord_x:.10g}")
