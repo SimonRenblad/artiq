@@ -22,15 +22,110 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class MessageType(Enum):
     OutputMessage = 0
     InputMessage = 1
     ExceptionMessage = 2
     StoppedMessage = 3
 
+
 class DisplayType(Enum):
     INT_64 = 0
     FLOAT_64 = 1
+
+
+class _AddChannelDialog(QtWidgets.QDialog):
+
+    def __init__(self, parent, channel_mgr=None):
+        QtWidgets.QDialog.__init__(self, parent=parent)
+        self.setWindowTitle("Add channel")   
+        self.cmgr = channel_mgr
+        self.parent = parent
+        grid = QtWidgets.QGridLayout()
+        grid.setRowMinimumHeight(1, 40)
+        grid.setColumnMinimumWidth(2, 60)
+        self.setLayout(grid)
+        self.waveform_channel_list = QtWidgets.QListWidget()
+        grid.addWidget(self.waveform_channel_list, 0, 0)
+        self.waveform_channel_list.itemDoubleClicked.connect(self.add_channel)
+        self.cmgr.traceDataChanged.connect(self.update_channels)
+
+    def add_channel(self, channel):
+        self.parent.add_channel(channel.text())
+        self.close()
+
+    def update_channels(self):
+        self.waveform_channel_list.clear()
+        for channel in self.cmgr.channels:
+            name = self.cmgr.channel_name_id_map.get_by_right(channel)
+            self.waveform_channel_list.addItem(name)
+
+
+class _ChannelDisplaySettingsDialog(QtWidgets.QDialog):
+    def __init__(self, parent, channel_mgr=None, channel=None):
+        QtWidgets.QDialog.__init__(self, parent=parent)
+        self.setWindowTitle("Display Channel Settings")
+        self.cmgr = channel_mgr
+        self.channel = channel
+
+        grid = QtWidgets.QGridLayout()
+        grid.setRowMinimumHeight(1, 40)
+        grid.setColumnMinimumWidth(2, 60)
+        self.setLayout(grid)
+
+        self.output_visible = QtWidgets.QCheckBox("OutputMessage") 
+        self.input_visible = QtWidgets.QCheckBox("InputMessage") 
+        self.exception_visible = QtWidgets.QCheckBox("ExceptionMessage")
+
+        grid.addWidget(self.output_visible, 0, 0)
+        grid.addWidget(self.input_visible, 1, 0)
+        grid.addWidget(self.exception_visible, 2, 0)
+
+        self.displaytype_out = QtWidgets.QComboBox()
+        self.displaytype_out.addItems(["INT_64", "FLOAT_64"])
+        self.displaytype_in = QtWidgets.QComboBox()
+        self.displaytype_in.addItems(["INT_64", "FLOAT_64"])
+
+        grid.addWidget(self.displaytype_out, 0, 1)
+        grid.addWidget(self.displaytype_in, 1, 1)
+
+        msg_types = self.cmgr.msg_types[self.channel]
+        if MessageType.OutputMessage in msg_types:
+            self.output_visible.setChecked(True)
+        if MessageType.InputMessage in msg_types:
+            self.input_visible.setChecked(True)
+        if MessageType.ExceptionMessage in msg_types:
+            self.exception_visible.setChecked(True)
+
+        display_types = self.cmgr.display_types[self.channel]
+        self.displaytype_out.setCurrentIndex(display_types[0].value)
+        self.displaytype_in.setCurrentIndex(display_types[1].value)
+        
+        self.cancel = QtWidgets.QPushButton("Cancel")
+        self.cancel.clicked.connect(self.close)
+
+        self.confirm = QtWidgets.QPushButton("Confirm")
+        self.confirm.clicked.connect(self._confirm_filter)
+
+        grid.addWidget(self.cancel, 3, 0)
+        grid.addWidget(self.confirm, 3, 1)
+    
+    def _confirm_filter(self):
+        self.cmgr.msg_types[self.channel] = set()
+        if self.output_visible.isChecked():
+            self.cmgr.msg_types[self.channel].add(MessageType.OutputMessage)
+        if self.input_visible.isChecked():
+            self.cmgr.msg_types[self.channel].add(MessageType.InputMessage)
+        if self.exception_visible.isChecked():
+            self.cmgr.msg_types[self.channel].add(MessageType.ExceptionMessage)
+
+        self.cmgr.display_types[self.channel][0] = DisplayType[self.displaytype_out.currentText()]
+        self.cmgr.display_types[self.channel][1] = DisplayType[self.displaytype_in.currentText()]
+
+        self.cmgr.broadcast_active()
+        self.close()
+
 
 class ActiveChannelList(QtWidgets.QListWidget):
 
@@ -46,34 +141,35 @@ class ActiveChannelList(QtWidgets.QListWidget):
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
        
         # Add channel
-        self.add_channel_dialog = AddChannelDialog(self, channel_mgr=self.cmgr)
+        self.add_channel_dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
         add_channel = QtWidgets.QAction("Add channel...", self)
         add_channel.triggered.connect(lambda: self.add_channel_dialog.open())
         add_channel.setShortcut("CTRL+N")
         add_channel.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel)
 
-        # Remove channel
-        remove_channel = QtWidgets.QAction("Delete", self)
-        remove_channel.triggered.connect(self.remove_channel)
-        self.addAction(remove_channel)
-
         # Message type to display
-        message_type_action = QtWidgets.QAction("Filter message types...", self)
+        message_type_action = QtWidgets.QAction("Display channel settings...", self)
         self.addAction(message_type_action)
-        message_type_action.triggered.connect(self.display_message_type_filter)
+        message_type_action.triggered.connect(self._display_message_type_filter)
 
         # Save list 
-        save_list_action = QtWidgets.QAction("Save active list", self)
+        save_list_action = QtWidgets.QAction("Save active list...", self)
         self.addAction(save_list_action)
         save_list_action.triggered.connect(lambda: asyncio.ensure_future(self._save_list_task()))
 
         # Load list
-        load_list_action = QtWidgets.QAction("Load active list", self)
+        load_list_action = QtWidgets.QAction("Load active list...", self)
         self.addAction(load_list_action)
         load_list_action.triggered.connect(lambda: asyncio.ensure_future(self._load_list_task()))
 
+        # Remove channel
+        remove_channel = QtWidgets.QAction("Delete channel", self)
+        remove_channel.triggered.connect(self.remove_channel)
+        self.addAction(remove_channel)
+
         self.cmgr.traceDataChanged.connect(self.clear)
+        self.itemDoubleClicked.connect(lambda item: self._display_message_type_filter())
 
     async def _save_list_task(self):
         try:
@@ -119,110 +215,24 @@ class ActiveChannelList(QtWidgets.QListWidget):
         c = self.cmgr.channel_name_id_map.get_by_left(s)
         return item, c
 
+    def _display_message_type_filter(self):
+        item, channel = self._selected_channel()
+        dialog = _ChannelDisplaySettingsDialog(self, 
+                                         channel_mgr=self.cmgr,
+                                         channel=channel)
+        dialog.open()
+
     def remove_channel(self):
         item, channel = self._selected_channel()
         self.takeItem(self.row(item))
         self.cmgr.active_channels.remove(channel)
         self.cmgr.broadcast_active()
 
-    def display_message_type_filter(self):
-        item, channel = self._selected_channel()
-        dialog = MessageTypeFilterDialog(self, 
-                                         channel_mgr=self.cmgr,
-                                         channel=channel)
-        dialog.open()
-
     def add_channel(self, channel):
         self.addItem(channel)
         channel = self.cmgr.channel_name_id_map.get_by_left(channel)
         self.cmgr.active_channels.append(channel)
         self.cmgr.broadcast_active()
-
-class MessageTypeFilterDialog(QtWidgets.QDialog):
-    def __init__(self, parent, channel_mgr=None, channel=None):
-        QtWidgets.QDialog.__init__(self, parent=parent)
-        self.setWindowTitle("Filter message types")
-        self.cmgr = channel_mgr
-        self.channel = channel
-
-        grid = QtWidgets.QGridLayout()
-        grid.setRowMinimumHeight(1, 40)
-        grid.setColumnMinimumWidth(2, 60)
-        self.setLayout(grid)
-
-        self.b0 = QtWidgets.QCheckBox("OutputMessage") 
-        self.b1 = QtWidgets.QCheckBox("InputMessage") 
-        self.b2 = QtWidgets.QCheckBox("ExceptionMessage")
-
-        grid.addWidget(self.b0, 0, 0)
-        grid.addWidget(self.b1, 1, 0)
-        grid.addWidget(self.b2, 2, 0)
-
-        self.displaytype_out = QtWidgets.QComboBox()
-        self.displaytype_out.addItems(["INT_64", "FLOAT_64"])
-        self.displaytype_in = QtWidgets.QComboBox()
-        self.displaytype_in.addItems(["INT_64", "FLOAT_64"])
-
-        grid.addWidget(self.displaytype_out, 0, 1)
-        grid.addWidget(self.displaytype_in, 1, 1)
-
-        msg_types = self.cmgr.msg_types[self.channel]
-        if MessageType.OutputMessage in msg_types:
-            self.b0.setChecked(True)
-        if MessageType.InputMessage in msg_types:
-            self.b1.setChecked(True)
-        if MessageType.ExceptionMessage in msg_types:
-            self.b2.setChecked(True)
-
-        display_types = self.cmgr.display_types[self.channel]
-        self.displaytype_out.setCurrentIndex(display_types[0].value)
-        self.displaytype_in.setCurrentIndex(display_types[1].value)
-
-        self.confirm = QtWidgets.QPushButton("Confirm")
-        self.confirm.clicked.connect(self.confirm_filter)
-
-        grid.addWidget(self.confirm, 3, 0)
-    
-    def confirm_filter(self):
-        self.cmgr.msg_types[self.channel] = set()
-        if self.b0.isChecked():
-            self.cmgr.msg_types[self.channel].add(MessageType.OutputMessage)
-        if self.b1.isChecked():
-            self.cmgr.msg_types[self.channel].add(MessageType.InputMessage)
-        if self.b2.isChecked():
-            self.cmgr.msg_types[self.channel].add(MessageType.ExceptionMessage)
-
-        self.cmgr.display_types[self.channel][0] = DisplayType[self.displaytype_out.currentText()]
-        self.cmgr.display_types[self.channel][1] = DisplayType[self.displaytype_in.currentText()]
-
-        self.cmgr.broadcast_active()
-        self.close()
-
-class AddChannelDialog(QtWidgets.QDialog):
-
-    def __init__(self, parent, channel_mgr=None):
-        QtWidgets.QDialog.__init__(self, parent=parent)
-        self.setWindowTitle("Add channel")   
-        self.cmgr = channel_mgr
-        self.parent = parent
-        grid = QtWidgets.QGridLayout()
-        grid.setRowMinimumHeight(1, 40)
-        grid.setColumnMinimumWidth(2, 60)
-        self.setLayout(grid)
-        self.waveform_channel_list = QtWidgets.QListWidget()
-        grid.addWidget(self.waveform_channel_list, 0, 0)
-        self.waveform_channel_list.itemDoubleClicked.connect(self.add_channel)
-        self.cmgr.traceDataChanged.connect(self.update_channels)
-
-    def add_channel(self, channel):
-        self.parent.add_channel(channel.text())
-        self.close()
-
-    def update_channels(self):
-        self.waveform_channel_list.clear()
-        for channel in self.cmgr.channels:
-            name = self.cmgr.channel_name_id_map.get_by_right(channel)
-            self.waveform_channel_list.addItem(name)
 
 
 class WaveformWidget(pg.PlotWidget):
@@ -236,7 +246,7 @@ class WaveformWidget(pg.PlotWidget):
         self.cmgr = channel_mgr
         self.cmgr.activeChannelsChanged.connect(self.refresh_display)
         self.cmgr.traceDataChanged.connect(self.refresh_display)
-        self.plots = list()
+        self._plots = list()
         self.left_mouse_pressed = False
         self.refresh_display()
         self.proxy = pg.SignalProxy(self.scene().sigMouseMoved, rateLimit=60, slot=self.get_cursor_coordinates)
@@ -247,15 +257,14 @@ class WaveformWidget(pg.PlotWidget):
     
     def refresh_display(self):
         start = time.monotonic()
-        self.display_graph()
+        self._display_graph()
         end = time.monotonic()
         logger.info(f"Refresh took {(end - start)*1000} ms")
 
-    def display_graph(self):
-        # redraw with each update - not expecting frequent updates
-        for plot in self.plots:
+    def _display_graph(self):
+        for plot in self._plots:
             self.removeItem(plot)
-        self.plots = list()
+        self._plots = list()
 
         for channel in self.cmgr.active_channels:
             for msg_type in self.cmgr.msg_types[channel]:
@@ -292,7 +301,7 @@ class WaveformWidget(pg.PlotWidget):
                         symbol=symbol,
                         name=f"Channel: {channel}, {msg_type.name}",
                         pen=pen)
-        self.plots.append(pdi)
+        self._plots.append(pdi)
         return
 
 # convenience class
@@ -321,6 +330,7 @@ class BijectiveMap:
     def rights(self):
         return self._rtol.keys()
 
+
 class _ChannelManager(QtCore.QObject):
     activeChannelsChanged = QtCore.pyqtSignal()
     traceDataChanged = QtCore.pyqtSignal()
@@ -333,8 +343,6 @@ class _ChannelManager(QtCore.QObject):
         self.msg_types = dict()
         self.channels = set()
         self.display_types = dict()
-        self.start_time = 0
-        self.end_time = 100
         self.unit = 'ps'
         self.timescale = 1
         self.timescale_magnitude = 1
@@ -344,21 +352,6 @@ class _ChannelManager(QtCore.QObject):
 
     def broadcast_data(self):
         self.traceDataChanged.emit()
-
-    def add_channel(self, channel):
-        self.active_channels.append(channel)
-        self.broadcast_active()
-
-    def remove_channel(self, id):
-        self.active_channels.remove(channel)
-        self.broadcast_active()
-
-    def get_active_channels(self):
-        return self.active_channels
-
-    def set_active_channels(self, active_channels):
-        self.active_channels = active_channels
-        self.broadcast_active()
 
 
 class _TraceManager:
@@ -454,16 +447,6 @@ class _TraceManager:
             logger.error("Failed to save binary trace file",
                          exc_info=True)
             
-   # @staticmethod 
-   # def _sent_bytes_from_header(header):
-   #     if header[0] == ord('E'):
-   #         endian = '>'
-   #     elif header[0] == ord('e'):
-   #         endian = '<'
-   #     else:
-   #         raise ValueError
-   #     return struct.unpack(endian + "I", header[1:5])[0]
-
     async def _pull_from_device_task(self):
         try:
             asyncio.ensure_future(exc_to_warning(self.proxy_client.pull_from_device()))
@@ -505,6 +488,8 @@ class _TraceManager:
                 self.proxy_reconnect.set()
             except:
                 logger.error("Proxy reconnect failed, is proxy running?", exc_info=1)
+            finally:
+                logger.info(f"Proxy connected on host {self.rtio_addr}")
 
     async def stop(self):
         self.reconnect_task.cancel()
@@ -600,15 +585,12 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.x_coord_label.setText(f"x: {coord_x:.10g}")
         self.y_coord_label.setText(f"y: {coord_y:.10g}")
 
-    # load from binary file
     def _load_trace_clicked(self):
         asyncio.ensure_future(self.tm._load_trace_task())
 
-    # save to binary file
     def _save_trace_clicked(self):
         asyncio.ensure_future(self.tm._save_trace_task())
     
-    # pull data from device buffer
     def _pull_from_device_clicked(self):
         asyncio.ensure_future(self.tm._pull_from_device_task())
 
