@@ -58,33 +58,61 @@ class ActiveChannelList(QtWidgets.QListWidget):
         remove_channel.triggered.connect(self.remove_channel)
         self.addAction(remove_channel)
 
-        # Data format
-        data_format_menu = QtWidgets.QMenu("Data Format", self)
-        int_format = QtWidgets.QAction("Int", self)
-        float_format = QtWidgets.QAction("Float", self)
-        data_format_menu.addAction(int_format)
-        data_format_menu.addAction(float_format)
-        data_format_action = QtWidgets.QAction("Data Format", self)
-        data_format_action.setMenu(data_format_menu)
-        self.addAction(data_format_action)
-        int_format.triggered.connect(lambda: self.set_waveform_datatype(DisplayType.INT_64))
-        float_format.triggered.connect(lambda: self.set_waveform_datatype(DisplayType.FLOAT_64))
-
         # Message type to display
         message_type_action = QtWidgets.QAction("Filter message types...", self)
         self.addAction(message_type_action)
         message_type_action.triggered.connect(self.display_message_type_filter)
 
-        self.cmgr.traceDataChanged.connect(self.clear)
         # Save list 
-#        save_list_action = QtWidgets.QAction("Save active list", self)
-#        self.addAction(save_list_action)
-#        save_list_action.triggered.connect(self.save_current_list)
+        save_list_action = QtWidgets.QAction("Save active list", self)
+        self.addAction(save_list_action)
+        save_list_action.triggered.connect(lambda: asyncio.ensure_future(self._save_list_task()))
 
-#    def save_current_list(self):
-#        l = self.channel_mgr.active_channels
-#
-        # save in some cache or save as file... not sure yet
+        # Load list
+        load_list_action = QtWidgets.QAction("Load active list", self)
+        self.addAction(load_list_action)
+        load_list_action.triggered.connect(lambda: asyncio.ensure_future(self._load_list_task()))
+
+        self.cmgr.traceDataChanged.connect(self.clear)
+
+    async def _save_list_task(self):
+        try:
+            filename = await get_save_file_name(
+                    self,
+                    "Save Channel List",
+                    "c://",
+                    "All files (*.*)")
+        except asyncio.CancelledError:
+            return
+        try:
+            with open(filename, 'w') as f:
+                for k in self.cmgr.active_channels:
+                    f.write(str(k) + ",")
+        except:
+            logger.error("Failed to save channel list",
+                         exc_info=True)
+
+    async def _load_list_task(self):
+        try:
+            filename = await get_open_file_name(
+                    self,
+                    "Load Channel List",
+                    "c://",
+                    "All files (*.*)")
+        except asyncio.CancelledError:
+            return
+        try:
+            with open(filename, 'r') as f:
+                txt = f.read()
+                self.cmgr.active_channels = [int(x) for x in txt.rstrip(",").split(",")]
+                self.clear()
+                for channel in self.cmgr.active_channels:
+                    self.addItem(self.cmgr.channel_name_id_map.get_by_right(channel))
+                self.cmgr.broadcast_active()
+        except:
+            logger.error("Failed to read channel list.",
+                         exc_info=True)
+
     def _selected_channel(self):
         item = self.currentItem()
         s = item.text()
@@ -104,11 +132,6 @@ class ActiveChannelList(QtWidgets.QListWidget):
                                          channel=channel)
         dialog.open()
 
-    def set_waveform_datatype(self, ty):
-        item, channel = self._selected_channel()
-        self.cmgr.display_types[channel] = ty
-        self.cmgr.broadcast_active()
-
     def add_channel(self, channel):
         self.addItem(channel)
         channel = self.cmgr.channel_name_id_map.get_by_left(channel)
@@ -121,24 +144,44 @@ class MessageTypeFilterDialog(QtWidgets.QDialog):
         self.setWindowTitle("Filter message types")
         self.cmgr = channel_mgr
         self.channel = channel
-        layout = QtWidgets.QVBoxLayout()
+
+        grid = QtWidgets.QGridLayout()
+        grid.setRowMinimumHeight(1, 40)
+        grid.setColumnMinimumWidth(2, 60)
+        self.setLayout(grid)
+
         self.b0 = QtWidgets.QCheckBox("OutputMessage") 
         self.b1 = QtWidgets.QCheckBox("InputMessage") 
         self.b2 = QtWidgets.QCheckBox("ExceptionMessage")
-        msg_types = self.cmgr.msg_types.get(self.channel, set())
-        if 0 in msg_types:
+
+        grid.addWidget(self.b0, 0, 0)
+        grid.addWidget(self.b1, 1, 0)
+        grid.addWidget(self.b2, 2, 0)
+
+        self.displaytype_out = QtWidgets.QComboBox()
+        self.displaytype_out.addItems(["INT_64", "FLOAT_64"])
+        self.displaytype_in = QtWidgets.QComboBox()
+        self.displaytype_in.addItems(["INT_64", "FLOAT_64"])
+
+        grid.addWidget(self.displaytype_out, 0, 1)
+        grid.addWidget(self.displaytype_in, 1, 1)
+
+        msg_types = self.cmgr.msg_types[self.channel]
+        if MessageType.OutputMessage in msg_types:
             self.b0.setChecked(True)
-        if 1 in msg_types:
+        if MessageType.InputMessage in msg_types:
             self.b1.setChecked(True)
-        if 2 in msg_types:
+        if MessageType.ExceptionMessage in msg_types:
             self.b2.setChecked(True)
+
+        display_types = self.cmgr.display_types[self.channel]
+        self.displaytype_out.setCurrentIndex(display_types[0].value)
+        self.displaytype_in.setCurrentIndex(display_types[1].value)
+
         self.confirm = QtWidgets.QPushButton("Confirm")
-        layout.addWidget(self.b0)
-        layout.addWidget(self.b1)
-        layout.addWidget(self.b2)
-        layout.addWidget(self.confirm)
         self.confirm.clicked.connect(self.confirm_filter)
-        self.setLayout(layout)
+
+        grid.addWidget(self.confirm, 3, 0)
     
     def confirm_filter(self):
         self.cmgr.msg_types[self.channel] = set()
@@ -148,6 +191,10 @@ class MessageTypeFilterDialog(QtWidgets.QDialog):
             self.cmgr.msg_types[self.channel].add(MessageType.InputMessage)
         if self.b2.isChecked():
             self.cmgr.msg_types[self.channel].add(MessageType.ExceptionMessage)
+
+        self.cmgr.display_types[self.channel][0] = DisplayType[self.displaytype_out.currentText()]
+        self.cmgr.display_types[self.channel][1] = DisplayType[self.displaytype_in.currentText()]
+
         self.cmgr.broadcast_active()
         self.close()
 
@@ -212,7 +259,7 @@ class WaveformWidget(pg.PlotWidget):
 
         for channel in self.cmgr.active_channels:
             for msg_type in self.cmgr.msg_types[channel]:
-                self._display_waveform(channel, MessageType(msg_type))
+                self._display_waveform(channel, msg_type)
     
     @staticmethod
     def convert_type(data, display_type):
@@ -222,8 +269,7 @@ class WaveformWidget(pg.PlotWidget):
             return struct.unpack('>d', struct.pack('>Q', data))[0]
 
     def _display_waveform(self, channel, msg_type):
-        display_type = self.cmgr.display_types.get(channel, DisplayType.INT_64)
-        data = self.cmgr.data[channel].get(msg_type.value, [])
+        data = self.cmgr.data[channel].get(msg_type, [])
         if len(data) == 0:
             return
         x_data = np.zeros(len(data))
@@ -234,6 +280,7 @@ class WaveformWidget(pg.PlotWidget):
         pen = None
         symbol = None
         if msg_type in [MessageType.OutputMessage, MessageType.InputMessage]:
+            display_type = self.cmgr.display_types[channel][msg_type.value]
             for i, y in enumerate(data):
                 y_data[i] = self.convert_type(y.data, display_type)
             pen = {'color': msg_type.value, 'width': 1}
@@ -335,6 +382,7 @@ class _TraceManager:
         channels = set()
         data = dict()
         msg_types = dict()
+        display_types= dict()
         for message in messages:
             # get class name directly to avoid name conflict with comm_analyzer.MessageType
             message_type = MessageType[message.__class__.__name__]
@@ -342,7 +390,7 @@ class _TraceManager:
                 break
 
             c = message.channel
-            v = message_type.value
+            v = message_type
 
             msg_types.setdefault(c, set())
             data.setdefault(c, {})
@@ -350,15 +398,16 @@ class _TraceManager:
 
             channels.add(c)
             msg_types[c].add(v)
+            display_types[c] = [DisplayType.INT_64, DisplayType.INT_64]
             data[c][v].append(message)
-        return channels, data, msg_types
+        return channels, data, msg_types, display_types
 
     def _update_from_dump(self, dump):
         self.dump = dump
         decoded_dump = decode_dump(dump)
         messages = decoded_dump.messages
 
-        channels, data, msg_types = self._parse_messages(messages)
+        channels, data, msg_types, display_types = self._parse_messages(messages)
 
         # default names if not defined in devicedb
         for c in channels:
@@ -368,13 +417,14 @@ class _TraceManager:
         self.cmgr.channels = channels
         self.cmgr.data = data
         self.cmgr.msg_types = msg_types
+        self.cmgr.display_types = display_types
         self.cmgr.active_channels = list()
         self.cmgr.traceDataChanged.emit()
 
     async def _load_trace_task(self):
         try:
             filename = await get_open_file_name(
-                    self,
+                    self.parent,
                     "Load Raw Dump",
                     "c://",
                     "All files (*.*)")
@@ -391,7 +441,7 @@ class _TraceManager:
     async def _save_trace_task(self):
         try:
             filename = await get_save_file_name(
-                    self,
+                    self.parent,
                     "Save Raw Dump",
                     "c://",
                     "All files (*.*)")
