@@ -337,7 +337,7 @@ class _WaveformWidget(pg.PlotWidget):
         pdi = self.plot(x_data,
                         y_data,
                         symbol=symbol,
-                        name=f"Channel: {channel}, {msg_type.name}",
+                        name=f"Channel: {self.cmgr.channel_name_id_map.get_by_right(channel)}, {msg_type.name}",
                         pen=pen)
         self._plots.append(pdi)
         return
