@@ -246,6 +246,7 @@ class _ActiveChannelList(QtWidgets.QListWidget):
             logger.error("Failed to read channel list.",
                          exc_info=True)
 
+    # TODO: catch errors here
     def _selected_channel(self):
         item = self.currentItem()
         s = item.text()
@@ -253,14 +254,20 @@ class _ActiveChannelList(QtWidgets.QListWidget):
         return item, c
 
     def _display_channel_settings(self):
-        item, channel = self._selected_channel()
+        try:
+            item, channel = self._selected_channel()
+        except:
+            return
         dialog = _ChannelDisplaySettingsDialog(self, 
                                          channel_mgr=self.cmgr,
                                          channel=channel)
         dialog.open()
 
     def remove_channel(self):
-        item, channel = self._selected_channel()
+        try:
+            item, channel = self._selected_channel()
+        except:
+            return
         self.takeItem(self.row(item))
         self.cmgr.active_channels.remove(channel)
         self.cmgr.broadcast_active()
