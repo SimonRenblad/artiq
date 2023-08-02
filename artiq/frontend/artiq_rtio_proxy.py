@@ -57,7 +57,7 @@ def main():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
-        signal_handler = SignalHandler() # handles Ctrl-C and terminate signals
+        signal_handler = SignalHandler()
         signal_handler.setup()
         try:
             rtio_analyzer_control = None
