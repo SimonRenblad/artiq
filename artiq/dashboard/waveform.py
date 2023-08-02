@@ -4,6 +4,7 @@ from PyQt5.QtCore import Qt
 from sipyco.keepalive import async_open_connection
 from sipyco.sync_struct import Subscriber
 from sipyco.pc_rpc import AsyncioClient
+from sipyco import pyon
 from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
 from artiq.coredevice.comm_analyzer import decode_dump
 import numpy as np
@@ -39,6 +40,7 @@ class _AddChannelDialog(QtWidgets.QDialog):
 
     def __init__(self, parent, channel_mgr=None):
         QtWidgets.QDialog.__init__(self, parent=parent)
+        self.setContextMenuPolicy(Qt.ActionsContextMenu)
         self.setWindowTitle("Add channel")   
         self.cmgr = channel_mgr
         self.parent = parent
@@ -49,6 +51,12 @@ class _AddChannelDialog(QtWidgets.QDialog):
         self.waveform_channel_list = QtWidgets.QListWidget()
         grid.addWidget(self.waveform_channel_list, 0, 0)
         self.waveform_channel_list.itemDoubleClicked.connect(self.add_channel)
+        enter_action = QtWidgets.QAction("Add channel", self)
+        enter_action.setShortcut("RETURN")
+        enter_action.setShortcutContext(Qt.WidgetShortcut)
+        self.addAction(enter_action)
+        enter_action.triggered.connect(
+                lambda: self.add_channel(self.waveform_channel_list.currentItem()))
         self.cmgr.traceDataChanged.connect(self.update_channels)
 
     def add_channel(self, channel):
@@ -142,49 +150,82 @@ class _ActiveChannelList(QtWidgets.QListWidget):
        
         # Add channel
         self.add_channel_dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
-        add_channel = QtWidgets.QAction("Add channel...", self)
-        add_channel.triggered.connect(lambda: self.add_channel_dialog.open())
-        add_channel.setShortcut("CTRL+N")
-        add_channel.setShortcutContext(Qt.WidgetShortcut)
-        self.addAction(add_channel)
+        add_channel_action = QtWidgets.QAction("Add channel...", self)
+        add_channel_action.triggered.connect(lambda: self.add_channel_dialog.open())
+        add_channel_action.setShortcut("CTRL+N")
+        add_channel_action.setShortcutContext(Qt.WidgetShortcut)
+        self.addAction(add_channel_action)
 
         # Message type to display
-        message_type_action = QtWidgets.QAction("Display channel settings...", self)
-        self.addAction(message_type_action)
-        message_type_action.triggered.connect(self._display_channel_settings)
+        display_settings_action = QtWidgets.QAction("Display channel settings...", self)
+        display_settings_action.triggered.connect(self._display_channel_settings)
+        display_settings_action.setShortcut("RETURN")
+        display_settings_action.setShortcutContext(Qt.WidgetShortcut)
+        self.addAction(display_settings_action)
         self.itemDoubleClicked.connect(lambda item: self._display_channel_settings())
 
         # Save list 
         save_list_action = QtWidgets.QAction("Save active list...", self)
-        self.addAction(save_list_action)
         save_list_action.triggered.connect(lambda: asyncio.ensure_future(self._save_list_task()))
+        save_list_action.setShortcut("CTRL+S")
+        save_list_action.setShortcutContext(Qt.WidgetShortcut)
+        self.addAction(save_list_action)
 
         # Load list
         load_list_action = QtWidgets.QAction("Load active list...", self)
-        self.addAction(load_list_action)
         load_list_action.triggered.connect(lambda: asyncio.ensure_future(self._load_list_task()))
+        load_list_action.setShortcut("CTRL+L")
+        load_list_action.setShortcutContext(Qt.WidgetShortcut)
+        self.addAction(load_list_action)
 
         # Remove channel
-        remove_channel = QtWidgets.QAction("Delete channel", self)
-        remove_channel.triggered.connect(self.remove_channel)
-        self.addAction(remove_channel)
+        remove_channel_action = QtWidgets.QAction("Delete channel", self)
+        remove_channel_action.triggered.connect(self.remove_channel)
+        remove_channel_action.setShortcut("DEL")
+        remove_channel_action.setShortcutContext(Qt.WidgetShortcut)
+        self.addAction(remove_channel_action)
 
         self.cmgr.traceDataChanged.connect(self.clear)
 
-    # TODO: Save with better data settings
+    def _prepare_save_list(self):
+        save_list = list()
+        for channel_id in self.cmgr.active_channels:
+            channel = dict()
+            channel['id'] = channel_id
+            channel['name'] = self.cmgr.channel_name_id_map.get_by_right(channel_id)
+            channel['msg_types'] = [x.value for x in self.cmgr.msg_types[channel_id]]
+            channel['display_types'] = [x.value for x in self.cmgr.display_types[channel_id]]
+            save_list.append(channel)
+        return pyon.encode(save_list)
+
+    def _read_save_list(self, save_list):
+        self.clear()
+        self.cmgr.active_channels = list()
+        save_list = pyon.decode(save_list)
+        for channel in save_list:
+            id = channel['id']
+            name = channel['name']
+            self.cmgr.channel_name_id_map.add(name, id)
+            self.cmgr.msg_types[id] = set([MessageType(x) for x in channel['msg_types']])
+            self.cmgr.display_types[id] = [DisplayType(x) for x in channel['display_types']]
+            self.addItem(name)
+            self.cmgr.active_channels.append(id)
+        self.cmgr.broadcast_active()
+
     async def _save_list_task(self):
         try:
             filename = await get_save_file_name(
                     self,
                     "Save Channel List",
                     "c://",
-                    "All files (*.*)")
+                    "PYON files (*.pyon)",
+                    suffix="pyon")
         except asyncio.CancelledError:
             return
         try:
+            save_list = self._prepare_save_list()
             with open(filename, 'w') as f:
-                for k in self.cmgr.active_channels:
-                    f.write(str(k) + ",")
+                    f.write(save_list)
         except:
             logger.error("Failed to save channel list",
                          exc_info=True)
@@ -195,17 +236,12 @@ class _ActiveChannelList(QtWidgets.QListWidget):
                     self,
                     "Load Channel List",
                     "c://",
-                    "All files (*.*)")
+                    "PYON files (*.pyon)")
         except asyncio.CancelledError:
             return
         try:
             with open(filename, 'r') as f:
-                txt = f.read()
-                self.cmgr.active_channels = [int(x) for x in txt.rstrip(",").split(",")]
-                self.clear()
-                for channel in self.cmgr.active_channels:
-                    self.addItem(self.cmgr.channel_name_id_map.get_by_right(channel))
-                self.cmgr.broadcast_active()
+                self._read_save_list(f.read())
         except:
             logger.error("Failed to read channel list.",
                          exc_info=True)
@@ -230,9 +266,10 @@ class _ActiveChannelList(QtWidgets.QListWidget):
         self.cmgr.broadcast_active()
 
     def add_channel(self, channel):
-        self.addItem(channel)
-        channel = self.cmgr.channel_name_id_map.get_by_left(channel)
-        self.cmgr.active_channels.append(channel)
+        channel_id = self.cmgr.channel_name_id_map.get_by_left(channel)
+        if channel_id not in self.cmgr.active_channels:
+            self.addItem(channel)
+            self.cmgr.active_channels.append(channel_id)
         self.cmgr.broadcast_active()
 
 
