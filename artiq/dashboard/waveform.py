@@ -249,7 +249,6 @@ class _ActiveChannelList(QtWidgets.QListWidget):
             logger.error("Failed to read channel list.",
                          exc_info=True)
 
-    # TODO: catch errors here
     def _selected_channel(self):
         item = self.currentItem()
         name = item.text()
@@ -414,6 +413,7 @@ class _TraceManager:
         self.proxy_client = AsyncioClient()
         self.trace_subscriber = Subscriber("rtio_trace", self.init_dump, self.update_dump) 
         self.proxy_reconnect = asyncio.Event()
+        self.dump_updated = asyncio.Event()
         self.reconnect_task = None
 
     # parsing and loading dump
@@ -459,6 +459,7 @@ class _TraceManager:
         self.cmgr.display_types = display_types
         self.cmgr.active_channels = list()
         self.cmgr.traceDataChanged.emit()
+        self.dump_updated.set()
 
     async def _load_trace_task(self):
         try:
@@ -568,8 +569,22 @@ class _TraceManager:
         self.cmgr.name_id_map = name_id_map
         if self.rtio_addr is not None:
             self.proxy_reconnect.set()
+    
+    # Experiment and applet handling
+    async def ccb_pull_helper(self, channels=None):
+        try:
+            await self.proxy_client.pull_from_device()
+            await self.dump_updated.wait()
+            self.dump_updated.clear()
+            self.cmgr.active_channels.clear()
+            for channel_id in channels:
+                name = self.cmgr.name_id_map.get_by_right(channel_id)
+                self.parent.waveform_active_channel_view.addItem(name)
+                self.cmgr.active_channels.append(channel_id)
+                self.cmgr.activeChannelsChanged.emit()
+        except:
+            logger.error("Error pulling from proxy, is proxy connected?", exc_info=1)
 
-    # Experiment and applet handler
     def ccb_notify(self, message):
         try:
             service = message["service"]
@@ -577,10 +592,7 @@ class _TraceManager:
             kwargs = message["kwargs"]
             # fix here with async func instead of wait_for
             if service == "pull_trace_from_device":
-                task = asyncio.ensure_future(exc_to_warning(self.proxy_client.pull_from_device()))
-                asyncio.wait_for(task, None)
-                for channel in args[0]:
-                    self.parent.waveform_active_channel_view.add_channel(self.cmgr.name_id_map.get_by_right(channel))
+                task = asyncio.ensure_future(exc_to_warning(self.ccb_pull_helper(**kwargs)))
         except:
             logger.error("failed to process CCB", exc_info=True)
 
