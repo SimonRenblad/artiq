@@ -637,10 +637,3 @@ class WaveformDock(QtWidgets.QDockWidget):
     
     def _pull_from_device_clicked(self):
         asyncio.ensure_future(self.tm._pull_from_device_task())
-    
-    # State management
-    def save_state(self):
-        pass
-
-    def restore_state(self):
-        pass
