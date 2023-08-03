@@ -573,8 +573,14 @@ class _TraceManager:
     def ccb_notify(self, message):
         try:
             service = message["service"]
+            args = message["args"]
+            kwargs = message["kwargs"]
+            # fix here with async func instead of wait_for
             if service == "pull_trace_from_device":
-                asyncio.ensure_future(exc_to_warning(self.proxy_client.pull_from_device()))
+                task = asyncio.ensure_future(exc_to_warning(self.proxy_client.pull_from_device()))
+                asyncio.wait_for(task, None)
+                for channel in args[0]:
+                    self.parent.waveform_active_channel_view.add_channel(self.cmgr.name_id_map.get_by_right(channel))
         except:
             logger.error("failed to process CCB", exc_info=True)
 
