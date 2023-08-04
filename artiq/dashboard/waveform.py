@@ -228,7 +228,7 @@ class _ActiveChannelList(QtWidgets.QListWidget):
         try:
             save_list = self._prepare_save_list()
             with open(filename, 'w') as f:
-                    f.write(save_list)
+                f.write(save_list)
         except:
             logger.error("Failed to save channel list",
                          exc_info=True)
@@ -571,7 +571,7 @@ class _TraceManager:
             self.proxy_reconnect.set()
     
     # Experiment and applet handling
-    async def ccb_pull_helper(self, channels=None):
+    async def ccb_pull_helper(self, channels=None, msg_types=None, display_types=None):
         try:
             await self.proxy_client.pull_from_device()
             await self.dump_updated.wait()
@@ -582,6 +582,10 @@ class _TraceManager:
                 self.parent.waveform_active_channel_view.addItem(name)
                 self.cmgr.active_channels.append(channel_id)
                 self.cmgr.activeChannelsChanged.emit()
+            if msg_types is not None:
+                self.cmgr.msg_types = msg_types
+            if display_types is not None:
+                self.cmgr.display_types = display_types
         except:
             logger.error("Error pulling from proxy, is proxy connected?", exc_info=1)
 
