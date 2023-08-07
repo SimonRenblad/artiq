@@ -11,6 +11,7 @@ from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
 from artiq.coredevice.comm_analyzer import decode_dump
 
 from enum import Enum
+from dataclasses import dataclass
 import numpy as np
 import pyqtgraph as pg
 import collections
@@ -66,42 +67,45 @@ class _AddChannelDialog(QtWidgets.QDialog):
         self.close()
 
     def update_channels(self):
+        print("update_channels called")
+        print(self.cmgr.channels)
         self.waveform_channel_list.clear()
-        for channel_id in self.cmgr.channels:
-            name = self.cmgr.name_id_map.get_by_right(channel_id)
+        for channel in self.cmgr.channels:
+            name = channel[0]
             self.waveform_channel_list.addItem(name)
 
 
 class _ChannelDisplaySettingsDialog(QtWidgets.QDialog):
-    def __init__(self, parent, channel_mgr=None, channel=None):
+    def __init__(self, parent, channel_mgr=None, channel_ind=None):
         QtWidgets.QDialog.__init__(self, parent=parent)
         self.setWindowTitle("Display Channel Settings")
         self.cmgr = channel_mgr
-        self.channel = channel
+        self.channel_ind = channel_ind
+        self.channel = self.cmgr.active_channels[channel_ind]
 
         grid = QtWidgets.QGridLayout()
         grid.setRowMinimumHeight(1, 40)
         grid.setColumnMinimumWidth(2, 60)
         self.setLayout(grid)
-
-        msg_types = self.cmgr.msg_types[self.channel]
+        
+        msg_types = self.channel.visible_types
         
         self.output_visible = QtWidgets.QCheckBox("OutputMessage") 
-        if MessageType.OutputMessage in msg_types:
+        if msg_types[0]:
             self.output_visible.setChecked(True)
         grid.addWidget(self.output_visible, 0, 0)
         
         self.input_visible = QtWidgets.QCheckBox("InputMessage") 
-        if MessageType.InputMessage in msg_types:
+        if msg_types[1]:
             self.input_visible.setChecked(True)
         grid.addWidget(self.input_visible, 1, 0)
 
         self.exception_visible = QtWidgets.QCheckBox("ExceptionMessage")
-        if MessageType.ExceptionMessage in msg_types:
+        if msg_types[2]:
             self.exception_visible.setChecked(True)
         grid.addWidget(self.exception_visible, 2, 0)
 
-        display_types = self.cmgr.display_types[self.channel]
+        display_types = self.channel.display_types
         all_display_types = [ty.name for ty in DisplayType]
        
         self.displaytype_out = QtWidgets.QComboBox()
@@ -123,17 +127,18 @@ class _ChannelDisplaySettingsDialog(QtWidgets.QDialog):
         grid.addWidget(self.confirm, 3, 1)
     
     def _confirm_filter(self):
-        self.cmgr.msg_types[self.channel] = set()
-        if self.output_visible.isChecked():
-            self.cmgr.msg_types[self.channel].add(MessageType.OutputMessage)
-        if self.input_visible.isChecked():
-            self.cmgr.msg_types[self.channel].add(MessageType.InputMessage)
-        if self.exception_visible.isChecked():
-            self.cmgr.msg_types[self.channel].add(MessageType.ExceptionMessage)
-
-        self.cmgr.display_types[self.channel][0] = DisplayType[self.displaytype_out.currentText()]
-        self.cmgr.display_types[self.channel][1] = DisplayType[self.displaytype_in.currentText()]
-
+        visible_types = (
+                self.output_visible.isChecked(),
+                self.input_visible.isChecked(),
+                self.exception_visible.isChecked()
+        )
+        self.channel.visible_types = visible_types
+        display_types = (
+            DisplayType[self.displaytype_out.currentText()],
+            DisplayType[self.displaytype_in.currentText()]
+        )
+        self.channel.display_types = display_types
+        self.cmgr.active_channels[self.channel_ind] = self.channel
         self.cmgr.broadcast_active()
         self.close()
 
@@ -188,16 +193,12 @@ class _ActiveChannelList(QtWidgets.QListWidget):
         remove_channel_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(remove_channel_action)
 
-        self.cmgr.traceDataChanged.connect(self.clear)
+        self.cmgr.addActiveChannelSignal.connect(self.add_channel)
 
     def _prepare_save_list(self):
         save_list = list()
-        for channel_id in self.cmgr.active_channels:
-            channel = dict()
-            channel['id'] = channel_id
-            channel['name'] = self.cmgr.name_id_map.get_by_right(channel_id)
-            channel['msg_types'] = [x.value for x in self.cmgr.msg_types[channel_id]]
-            channel['display_types'] = [x.value for x in self.cmgr.display_types[channel_id]]
+        for channel in self.cmgr.active_channels:
+            channel_dict = channel.describe()
             save_list.append(channel)
         return pyon.encode(save_list)
 
@@ -208,11 +209,11 @@ class _ActiveChannelList(QtWidgets.QListWidget):
         for channel in save_list:
             id = channel['id']
             name = channel['name']
-            self.cmgr.name_id_map.add(name, id)
-            self.cmgr.msg_types[id] = set([MessageType(x) for x in channel['msg_types']])
-            self.cmgr.display_types[id] = [DisplayType(x) for x in channel['display_types']]
+            visible_types = channel['visible_types']
+            display_types = channel['display_types']
+            channel_obj = Channel(name, id, display_types, visible_types)
+            self.cmgr.active_channels.append(channel_obj)
             self.addItem(name)
-            self.cmgr.active_channels.append(id)
         self.cmgr.broadcast_active()
 
     async def _save_list_task(self):
@@ -249,36 +250,26 @@ class _ActiveChannelList(QtWidgets.QListWidget):
             logger.error("Failed to read channel list.",
                          exc_info=True)
 
-    def _selected_channel(self):
-        item = self.currentItem()
-        name = item.text()
-        channel_id = self.cmgr.name_id_map.get_by_left(name)
-        return item, channel_id
-
     def _display_channel_settings(self):
-        try:
-            _, channel_id = self._selected_channel()
-        except:
-            return
+        item = self.currentItem()
+        ind = self.row(item)
         dialog = _ChannelDisplaySettingsDialog(self, 
                                          channel_mgr=self.cmgr,
-                                         channel=channel_id)
+                                         channel_ind=ind)
         dialog.open()
 
     def remove_channel(self):
-        try:
-            item, channel_id = self._selected_channel()
-        except:
-            return
-        self.takeItem(self.row(item))
-        self.cmgr.active_channels.remove(channel_id)
+        item = self.currentItem()
+        ind = self.row(item)
+        self.takeItem(ind)
+        self.cmgr.active_channels.pop(ind)
         self.cmgr.broadcast_active()
 
-    def add_channel(self, channel):
-        channel_id = self.cmgr.name_id_map.get_by_left(channel)
-        if channel_id not in self.cmgr.active_channels:
-            self.addItem(channel)
-            self.cmgr.active_channels.append(channel_id)
+    def add_channel(self, name):
+        channel_id = self.cmgr.get_channel_id(name)
+        channel = Channel(name, channel_id)
+        self.addItem(name)
+        self.cmgr.active_channels.append(channel)
         self.cmgr.broadcast_active()
 
 
@@ -313,8 +304,9 @@ class _WaveformWidget(pg.PlotWidget):
         self._plots = list()
 
         for channel in self.cmgr.active_channels:
-            for msg_type in self.cmgr.msg_types[channel]:
-                self._display_waveform(channel, msg_type)
+            for i in range(3):
+                if channel.visible_types[i]:
+                    self._display_waveform(channel, MessageType(i))
     
     @staticmethod
     def _convert_type(data, display_type):
@@ -324,7 +316,7 @@ class _WaveformWidget(pg.PlotWidget):
             return struct.unpack('>d', struct.pack('>Q', data))[0]
 
     def _display_waveform(self, channel, msg_type):
-        data = self.cmgr.data[channel].get(msg_type, [])
+        data = self.cmgr.data.get(channel.id, {}).get(msg_type.value, [])
         if len(data) == 0:
             return
         x_data = np.zeros(len(data))
@@ -335,63 +327,58 @@ class _WaveformWidget(pg.PlotWidget):
         pen = None
         symbol = None
         if msg_type in [MessageType.OutputMessage, MessageType.InputMessage]:
-            display_type = self.cmgr.display_types[channel][msg_type.value]
+            display_type = channel.display_types[msg_type.value]
             for i, y in enumerate(data):
                 y_data[i] = self._convert_type(y.data, display_type)
             pen = {'color': msg_type.value, 'width': 1}
-        else:
+        else: # ExceptionMessage
             symbol = 'x'
 
         pdi = self.plot(x_data,
                         y_data,
                         symbol=symbol,
-                        name=f"Channel: {self.cmgr.name_id_map.get_by_right(channel)}, {msg_type.name}",
+                        name=f"Channel: {channel.name}, {msg_type.name}",
                         pen=pen)
         self._plots.append(pdi)
         return
 
-# convenience class
-class BijectiveMap:
-    def __init__(self):
-        self._ltor = dict()
-        self._rtol = dict()
-
-    def add(self, left, right):
-        if left in self._ltor:
-            del self._rtol[self._ltor[left]]
-        if right in self._rtol:
-            del self._ltor[self._rtol[right]]
-        self._ltor[left] = right
-        self._rtol[right] = left
-
-    def get_by_left(self, left, default=None):
-        return self._ltor.get(left, default)
-
-    def get_by_right(self, right, default=None):
-        return self._rtol.get(right, default)
-
-    def lefts(self):
-        return self._ltor.keys()
-
-    def rights(self):
-        return self._rtol.keys()
+@dataclass
+class Channel:
+    name: str
+    id: int
+    display_types: tuple = (DisplayType.INT_64, DisplayType.INT_64)
+    visible_types: tuple = (True, True, True)
 
 
 class _ChannelManager(QtCore.QObject):
     activeChannelsChanged = QtCore.pyqtSignal()
     traceDataChanged = QtCore.pyqtSignal()
+    addActiveChannelSignal = QtCore.pyqtSignal(str)
 
     def __init__(self):
         QtCore.QObject.__init__(self) 
         self.data = dict()
         self.active_channels = list()
-        self.name_id_map = BijectiveMap()
-        self.msg_types = dict()
-        self.channels = set()
-        self.display_types = dict()
-        self.unit = 'ps'
-        self.timescale = 1
-        self.timescale_magnitude = 1
+        self.channels = list()
+
+    def set_channel_active(self, name):
+        selected = None
+        for channel in self.channels:
+            if channel[0] == name:
+                selected = channel
+                break
+        new_active_channel = Channel(name, id)
+        self.active_channels.append(new_active_channel)
+
+    def get_channel_name(self, id):
+        for channel in self.channels:
+            if channel[1] == id:
+                return channel[0]
+
+    def get_channel_id(self, name):
+        for channel in self.channels:
+            if channel[0] == name:
+                return channel[1]
 
     def broadcast_active(self):
         self.activeChannelsChanged.emit()
@@ -419,45 +406,27 @@ class _TraceManager:
     # parsing and loading dump
     @staticmethod
     def _parse_messages(messages):
-        channels = set()
+        channels = list()
         data = dict()
-        msg_types = dict()
-        display_types= dict()
         for message in messages:
             # get class name directly to avoid name conflict with comm_analyzer.MessageType
             msg_type = MessageType[message.__class__.__name__]
             if msg_type == MessageType.StoppedMessage:
                 break
-
             channel_id = message.channel
-
-            msg_types.setdefault(channel_id, set())
             data.setdefault(channel_id, {})
-            data[channel_id].setdefault(msg_type, [])
-
-            channels.add(channel_id)
-            msg_types[channel_id].add(msg_type)
-            display_types[channel_id] = [DisplayType.INT_64, DisplayType.INT_64]
-            data[channel_id][msg_type].append(message)
-        return channels, data, msg_types, display_types
+            data[channel_id].setdefault(msg_type.value, [])
+            data[channel_id][msg_type.value].append(message)
+        return data
 
     def _update_from_dump(self, dump):
         self.dump = dump
         decoded_dump = decode_dump(dump)
         messages = decoded_dump.messages
 
-        channels, data, msg_types, display_types = self._parse_messages(messages)
+        data = self._parse_messages(messages)
 
-        # default names if not defined in devicedb
-        for c in channels:
-            if c not in self.cmgr.name_id_map.rights():
-                self.cmgr.name_id_map.add("unnamed_channel"+str(c), c)
-
-        self.cmgr.channels = channels
         self.cmgr.data = data
-        self.cmgr.msg_types = msg_types
-        self.cmgr.display_types = display_types
-        self.cmgr.active_channels = list()
         self.cmgr.traceDataChanged.emit()
         self.dump_updated.set()
 
@@ -535,7 +504,7 @@ class _TraceManager:
                 self.proxy_reconnect.set()
             except:
                 logger.error("Proxy reconnect failed, is proxy running?")
-            finally:
+            else:
                 logger.info(f"Proxy connected on host {self.rtio_addr}")
 
     async def stop(self):
@@ -556,36 +525,30 @@ class _TraceManager:
         self.ddb = ddb
 
     def update_ddb(self, mod):
-        name_id_map = BijectiveMap()
+        channels = list()
         for name, desc in self.ddb.items():
             if isinstance(desc, dict):
                 if "arguments" in desc and "channel" in desc["arguments"] and desc["type"] == "local":
                     channel = desc["arguments"]["channel"]
-                    name_id_map.add(name, channel)
+                    channels.append((name, channel))
                 elif desc["type"] == "controller" and name == "core_analyzer":
                     self.rtio_addr = desc["host"]
                     self.rtio_port = desc.get("port_proxy", 1382)
                     self.rtio_port_control = desc.get("port_proxy_control", 1385)
-        self.cmgr.name_id_map = name_id_map
+        self.cmgr.channels = channels
+        self.cmgr.traceDataChanged.emit() # change to other signal
         if self.rtio_addr is not None:
             self.proxy_reconnect.set()
     
     # Experiment and applet handling
-    async def ccb_pull_helper(self, channels=None, msg_types=None, display_types=None):
+    async def ccb_pull_helper(self, channels=None):
         try:
             await self.proxy_client.pull_from_device()
             await self.dump_updated.wait()
             self.dump_updated.clear()
             self.cmgr.active_channels.clear()
-            for channel_id in channels:
-                name = self.cmgr.name_id_map.get_by_right(channel_id)
-                self.parent.waveform_active_channel_view.addItem(name)
-                self.cmgr.active_channels.append(channel_id)
-                self.cmgr.activeChannelsChanged.emit()
-            if msg_types is not None:
-                self.cmgr.msg_types = msg_types
-            if display_types is not None:
-                self.cmgr.display_types = display_types
+            for name in channels:
+                self.cmgr.addActiveChannelSignal.emit(name)
         except:
             logger.error("Error pulling from proxy, is proxy connected?", exc_info=1)
 
@@ -594,7 +557,6 @@ class _TraceManager:
             service = message["service"]
             args = message["args"]
             kwargs = message["kwargs"]
-            # fix here with async func instead of wait_for
             if service == "pull_trace_from_device":
                 task = asyncio.ensure_future(exc_to_warning(self.ccb_pull_helper(**kwargs)))
         except:
