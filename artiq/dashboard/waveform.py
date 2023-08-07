@@ -67,8 +67,6 @@ class _AddChannelDialog(QtWidgets.QDialog):
         self.close()
 
     def update_channels(self):
-        print("update_channels called")
-        print(self.cmgr.channels)
         self.waveform_channel_list.clear()
         for channel in self.cmgr.channels:
             name = channel[0]
@@ -280,7 +278,7 @@ class _WaveformWidget(pg.PlotWidget):
         pg.PlotWidget.__init__(self, parent=parent)
         self.addLegend()
         self.showGrid(True, True, 0.5)
-        self.setLabel('bottom', text='time', units='s')
+        self.setLabel('bottom', text='time', units='s') # TODO: necessary?
         self.cmgr = channel_mgr
         self.cmgr.activeChannelsChanged.connect(self.refresh_display)
         self.cmgr.traceDataChanged.connect(self.refresh_display)
