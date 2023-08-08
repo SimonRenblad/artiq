@@ -28,7 +28,7 @@ class DummyControl:
         self.notifier = Notifier(self.data)
 
     def pull_from_device(self):
-        dump = b"Hello World"
+        dump = b""
         with open("dump7.bin", "rb") as f:
             dump = f.read()
         self.notifier["data"] = dump
