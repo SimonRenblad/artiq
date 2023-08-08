@@ -11,7 +11,7 @@ from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
 from artiq.coredevice.comm_analyzer import decode_dump
 
 from enum import Enum
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
 import numpy as np
 import pyqtgraph as pg
 import collections
@@ -108,12 +108,12 @@ class _ChannelDisplaySettingsDialog(QtWidgets.QDialog):
        
         self.displaytype_out = QtWidgets.QComboBox()
         self.displaytype_out.addItems(all_display_types)
-        self.displaytype_out.setCurrentIndex(display_types[0].value)
+        self.displaytype_out.setCurrentIndex(display_types[0])
         grid.addWidget(self.displaytype_out, 0, 1)
 
         self.displaytype_in = QtWidgets.QComboBox()
         self.displaytype_in.addItems(all_display_types)
-        self.displaytype_in.setCurrentIndex(display_types[1].value)
+        self.displaytype_in.setCurrentIndex(display_types[1])
         grid.addWidget(self.displaytype_in, 1, 1)
 
         self.cancel = QtWidgets.QPushButton("Cancel")
@@ -126,14 +126,14 @@ class _ChannelDisplaySettingsDialog(QtWidgets.QDialog):
     
     def _confirm_filter(self):
         visible_types = (
-                self.output_visible.isChecked(),
-                self.input_visible.isChecked(),
-                self.exception_visible.isChecked()
+            self.output_visible.isChecked(),
+            self.input_visible.isChecked(),
+            self.exception_visible.isChecked()
         )
         self.channel.visible_types = visible_types
         display_types = (
-            DisplayType[self.displaytype_out.currentText()],
-            DisplayType[self.displaytype_in.currentText()]
+            DisplayType[self.displaytype_out.currentText()].value,
+            DisplayType[self.displaytype_in.currentText()].value
         )
         self.channel.display_types = display_types
         self.cmgr.active_channels[self.channel_ind] = self.channel
@@ -196,22 +196,18 @@ class _ActiveChannelList(QtWidgets.QListWidget):
     def _prepare_save_list(self):
         save_list = list()
         for channel in self.cmgr.active_channels:
-            channel_dict = channel.describe()
-            save_list.append(channel)
+            channel_dict = asdict(channel)
+            save_list.append(channel_dict)
         return pyon.encode(save_list)
 
     def _read_save_list(self, save_list):
         self.clear()
         self.cmgr.active_channels = list()
         save_list = pyon.decode(save_list)
-        for channel in save_list:
-            id = channel['id']
-            name = channel['name']
-            visible_types = channel['visible_types']
-            display_types = channel['display_types']
-            channel_obj = Channel(name, id, display_types, visible_types)
-            self.cmgr.active_channels.append(channel_obj)
-            self.addItem(name)
+        for channel_dict in save_list:
+            channel = Channel(**channel_dict)
+            self.cmgr.active_channels.append(channel)
+            self.addItem(channel.name)
         self.cmgr.broadcast_active()
 
     async def _save_list_task(self):
@@ -325,7 +321,7 @@ class _WaveformWidget(pg.PlotWidget):
         pen = None
         symbol = None
         if msg_type in [MessageType.OutputMessage, MessageType.InputMessage]:
-            display_type = channel.display_types[msg_type.value]
+            display_type = DisplayType(channel.display_types[msg_type.value])
             for i, y in enumerate(data):
                 y_data[i] = self._convert_type(y.data, display_type)
             pen = {'color': msg_type.value, 'width': 1}
@@ -344,7 +340,7 @@ class _WaveformWidget(pg.PlotWidget):
 class Channel:
     name: str
     id: int
-    display_types: tuple = (DisplayType.INT_64, DisplayType.INT_64)
+    display_types: tuple = (0, 0)
     visible_types: tuple = (True, True, True)
 
 
@@ -357,7 +353,7 @@ class _ChannelManager(QtCore.QObject):
         QtCore.QObject.__init__(self) 
         self.data = dict()
         self.active_channels = list()
-        self.channels = list()
+        self.channels = dict()
 
     def set_channel_active(self, name):
         selected = None
@@ -402,8 +398,7 @@ class _TraceManager:
         self.reconnect_task = None
 
     # parsing and loading dump
-    @staticmethod
-    def _parse_messages(messages):
+    def _parse_messages(self, messages):
         channels = list()
         data = dict()
         for message in messages:
@@ -413,18 +408,20 @@ class _TraceManager:
                 break
             channel_id = message.channel
             data.setdefault(channel_id, {})
-            data[channel_id].setdefault(msg_type.value, [])
-            data[channel_id][msg_type.value].append(message)
+            data[channel_id] = self._parse_message(message)
         return data
+
+    def _parse_message(self, message):
+        msg_type = MessageType[message.__class__.__name__]
+        channel = message.channel
+        parser = self.channel_parsers.get(channel)
+        parser.parse_message(message)
 
     def _update_from_dump(self, dump):
         self.dump = dump
         decoded_dump = decode_dump(dump)
         messages = decoded_dump.messages
-
-        data = self._parse_messages(messages)
-
-        self.cmgr.data = data
+        self._parse_messages(messages)
         self.cmgr.traceDataChanged.emit()
         self.dump_updated.set()
 
@@ -523,17 +520,38 @@ class _TraceManager:
         self.ddb = ddb
 
     def update_ddb(self, mod):
-        channels = list()
-        for name, desc in self.ddb.items():
+        devices = self.ddb
+        channel_parsers = dict()
+        for name, desc in sorted(devices.items(), key=itemgetter(0)):
             if isinstance(desc, dict):
-                if "arguments" in desc and "channel" in desc["arguments"] and desc["type"] == "local":
-                    channel = desc["arguments"]["channel"]
-                    channels.append((name, channel))
+                if desc["type"] == "local":
+                    if (desc["module"] == "artiq.coredevice.ttl"
+                            and desc["class"] in {"TTLOut", "TTLInOut"}):
+                        channel = desc["arguments"]["channel"]
+                        channel_parsers[channel] = TTLChannel(name)
+                    if (desc["module"] == "artiq.coredevice.ttl"
+                            and desc["class"] == "TTLClockGen"):
+                        channel = desc["arguments"]["channel"]
+                        channel_parsers[channel] = TTLClockGenChannel(name)
+                    if (desc["module"] == "artiq.coredevice.ad9914"
+                            and desc["class"] == "AD9914"):
+                        dds_bus_channel = desc["arguments"]["bus_channel"]
+                        dds_channel = desc["arguments"]["channel"]
+                        if dds_bus_channel in channel_parsers:
+                            dds_handler = channel_parsers[dds_bus_channel]
+                        else:
+                            dds_handler = DDSBusChannel(dds_onehot_sel, dds_sysclk)
+                            channel_parsers[dds_bus_channel] = dds_handler
+                        dds_handler.add_dds_channel(name, dds_channel)
+                    if (desc["module"] == "artiq.coredevice.spi2" and
+                            desc["class"] == "SPIMaster"):
+                        channel = desc["arguments"]["channel"]
+                        channel_parsers[channel] = SPI2Channel(name)
                 elif desc["type"] == "controller" and name == "core_analyzer":
                     self.rtio_addr = desc["host"]
                     self.rtio_port = desc.get("port_proxy", 1382)
                     self.rtio_port_control = desc.get("port_proxy_control", 1385)
-        self.cmgr.channels = channels
+        self.channel_parsers = channel_parsers
         self.cmgr.traceDataChanged.emit() # change to other signal
         if self.rtio_addr is not None:
             self.proxy_reconnect.set()
@@ -559,6 +577,140 @@ class _TraceManager:
                 task = asyncio.ensure_future(exc_to_warning(self.ccb_pull_helper(**kwargs)))
         except:
             logger.error("failed to process CCB", exc_info=True)
+
+
+class TTLChannel:
+    def __init__(self, channel_mgr, name, channel_id):
+        self.name = name
+        self.channel_id = channel_id
+        self.display_name = f"ttl/{name}/{channel_id}"
+        self.cmgr = channel_mgr
+        self.last_value = -1
+        self.oe = True
+
+    def parse_message(self, message):
+        msg_type = MessageType[message.__class__.__name__]
+        if msg_type is MessageType.OutputMessage:
+            if message.address == 0:
+                self.last_value = message.data
+                if self.oe:
+                    self.cmgr.data[message.channel].append((self.last_value, message.timestamp))
+            elif message.address == 1:
+                self.oe = bool(message.data)
+                if self.oe:
+                    self.cmgr.data[message.channel].append((self.last_value, message.timestamp))
+                else:
+                    self.cmgr.data[message.channel].append((-1, message.timestamp))
+        elif msg_type is MessageType.InputMessage:
+            self.cmgr.data[message.channel].append((message.data, message.timestamp))
+
+
+class TTLClockGenChannel:
+    def __init__(self, channel_mgr, name, channel_id):
+        self.name = name
+        self.channel_id = channel_id
+        self.display_name = f"ttl_clkgen/{name}/{channel_id}"
+
+    def parse_message(self, message):
+        msg_type = MessageType[message.__class__.__name__]
+        if msg_type is MessageType.OutputMessage:
+            frequency = message.data / self.cmgr.ref_period / 2**24
+            self.cmgr.data[message.channel].append((frequency, message.timestamp))
+
+# most complicated, wait for last
+class DDSBusChannel:
+    def __init__(self, channel_mgr, onehot_sel, sysclk):
+        self.cmgr = channel_mgr
+        self.onehot_sel = onehot_sel
+        self.sysclk = sysclk
+
+        self.selected_dds_channels = set()
+        self.dds_channels = dict()
+
+    def add_dds_channel(self, name, dds_channel_nr):
+        dds_channel = dict()
+        dds_channel["vcd_frequency"] = \
+            self.vcd_manager.get_channel(name + "/frequency", 64)
+        dds_channel["vcd_phase"] = \
+            self.vcd_manager.get_channel(name + "/phase", 64)
+        dds_channel["ftw"] = [None, None]
+        dds_channel["pow"] = None
+        self.dds_channels[dds_channel_nr] = dds_channel
+
+    def _gpio_to_channels(self, gpio):
+        gpio >>= 1  # strip reset
+        if self.onehot_sel:
+            r = set()
+            nr = 0
+            mask = 1
+            while gpio >= mask:
+                if gpio & mask:
+                    r.add(nr)
+                nr += 1
+                mask *= 2
+            return r
+        else:
+            return {gpio}
+
+    def _decode_ad9914_write(self, message):
+        if message.address == 0x81:
+            self.selected_dds_channels = self._gpio_to_channels(message.data)
+        for dds_channel_nr in self.selected_dds_channels:
+            dds_channel = self.dds_channels[dds_channel_nr]
+            if message.address == 0x11:
+                dds_channel["ftw"][0] = message.data
+            elif message.address == 0x13:
+                dds_channel["ftw"][1] = message.data
+            elif message.address == 0x31:
+                dds_channel["pow"] = message.data
+            elif message.address == 0x80:  # FUD
+                if None not in dds_channel["ftw"]:
+                    ftw = sum(x << i*16
+                              for i, x in enumerate(dds_channel["ftw"]))
+                    frequency = ftw * self.sysclk / 2**32
+                    self.cmgr.data[f"{self.display_name}/frequency"].append((frequency, message.timestamp))
+                if dds_channel["pow"] is not None:
+                    phase = dds_channel["pow"] / 2**16
+                    self.cmgr.data[f"{self.display_name}/phase"].append((phase, message.timestamp))
+
+    def process_message(self, message):
+        if isinstance(message, OutputMessage):
+            self._decode_ad9914_write(message)
+
+class SPI2Channel:
+    def __init__(self, channel_mgr, name, channel_id):
+        self.name = name
+        self.channel_id = channel_id
+        self.display_name = f"spi2/{name}/{channel_id}"
+        self._reads = []
+
+    def parse_message(self, message):
+        self.cmgr.data[f"{self.display_name}/stb"].append((1, message.timestamp))
+        self.cmgr.data[f"{self.display_name}/stb"].append((0, message.timestamp))
+        msg_type = MessageType[message.__class__.__name__]
+        if msg_type is MessageType.OutputMessage:
+            data = message.data
+            address = message.address
+            if address == 1:
+                chip_sel = data >> 24
+                div = data >> 16 & 0xff
+                length = data >> 8 & 0x1f
+                flags = data & 0xff
+                self.cmgr.data[f"{self.display_name}/flags"].append((flags, message.timestamp))
+                self.cmgr.data[f"{self.display_name}/length"].append((length, message.timestamp))
+                self.cmgr.data[f"{self.display_name}/div"].append((div, message.timestamp))
+                self.cmgr.data[f"{self.display_name}/chip_select"].append((chip_sel, message.timestamp))
+            elif address == 0:
+                self.cmgr.data[f"{self.display_name}/write"].append((data, message.timestamp))
+            else:
+                raise ValueError("bad address", address)
+            # process untimed reads and insert them here
+            while (self._reads and
+                   self._reads[0].rtio_counter < message.timestamp):
+                read = self._reads.pop(0)
+                self.cmgr.data[f"{self.display_name}/read"].append((read.data, message.timestamp))
+        elif msg_type is MessageType.InputMessage:
+            self._reads.append(message)
 
 class WaveformDock(QtWidgets.QDockWidget):
     def __init__(self, loop=None):
