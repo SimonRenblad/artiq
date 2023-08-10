@@ -136,19 +136,21 @@ def vcd_codes():
 
 
 class VCDChannel:
-    def __init__(self, out, code):
+    def __init__(self, out, code, width):
         self.out = out
         self.code = code
+        self.width = width
+        self.fmt_string = "{" + ":0{}b".format(width) + "}"
 
     def set_value(self, value):
-        if len(value) > 1:
-            self.out.write("b" + value + " " + self.code + "\n")
+        if len(self.width) > 1:
+            self.out.write("b" + str(value) + " " + self.code + "\n")
         else:
-            self.out.write(value + self.code + "\n")
+            self.out.write(self.fmt_string.format(value) + self.code + "\n")
 
     def set_value_double(self, x):
         integer_cast = struct.unpack(">Q", struct.pack(">d", x))[0]
-        self.set_value("{:064b}".format(integer_cast))
+        self.set_value(integer_cast)
 
 
 class VCDManager:
@@ -164,7 +166,7 @@ class VCDManager:
         code = next(self.codes)
         self.out.write("$var wire {width} {code} {name} $end\n"
                        .format(name=name, code=code, width=width))
-        return VCDChannel(self.out, code)
+        return VCDChannel(self.out, code, width)
 
     @contextmanager
     def scope(self, name):
@@ -176,6 +178,49 @@ class VCDManager:
         if time != self.current_time:
             self.out.write("#{}\n".format(time))
             self.current_time = time
+
+
+# Reuse the handlers for display in dashboard waveform
+class WaveformChannel:
+    def __init__(self, name, cmgr=None):
+        self.current_time = 0
+        self.cmgr = cmgr
+        self.cmgr.data[name] = list()
+        self.name = name
+
+    def set_value(self, value):
+        self.cmgr.data[self.name].append((value, self.current_time))
+
+    def set_value_double(self, x):
+        self.set_value(x)
+
+    def set_time(self, time):
+        self.current_time = time
+
+
+class WaveformManager:
+    def __init__(self, cmgr=None):
+        self.current_time = 0
+        self.timescale = None
+        self.channels = dict()
+        self.cmgr = cmgr
+    
+    def set_timescale_ps(self, timescale):
+        self.timescale = timescale * 1e-9
+
+    def get_channel(self, name, width):
+        channel = WaveformChannel(name, self.cmgr)
+        self.channels[name] = channel
+        self.cmgr.channels.append(name) #TODO make smarter, ignore if exist etc, make orderedset or smth
+        return channel
+    
+    @contextmanager
+    def scope(self, name):
+        pass
+
+    def set_time(self, time):
+        for channel in self.channels:
+            channel.set_time(time)
 
 
 class TTLHandler:
@@ -512,6 +557,13 @@ def get_message_time(message):
 
 def decoded_dump_to_vcd(fileobj, devices, dump, uniform_interval=False):
     vcd_manager = VCDManager(fileobj)
+    _process_dump(vcd_manager, devices, dump, uniform_interval)
+
+def decoded_dump_to_waveform(channel_mgr, devices, dump, uniform_interval=False):
+    manager = WaveformManager(channel_mgr)
+    _process_dump(manager, devices, dump, uniform_interval)
+
+def _process_dump(vcd_manager, devices, dump, uniform_interval):
     ref_period = get_ref_period(devices)
 
     if ref_period is not None:
@@ -561,7 +613,7 @@ def decoded_dump_to_vcd(fileobj, devices, dump, uniform_interval=False):
                 if uniform_interval:
                     interval.set_value_double((t - t0)*ref_period)
                     vcd_manager.set_time(i)
-                    timestamp.set_value("{:064b}".format(t))
+                    timestamp.set_value(t)
                     t0 = t
                 else:
                     vcd_manager.set_time(t)
