@@ -11,7 +11,6 @@ from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
 from artiq.coredevice.comm_analyzer import decode_dump
 
 from enum import Enum
-from dataclasses import dataclass, asdict
 from operator import itemgetter
 import numpy as np
 import pyqtgraph as pg
@@ -74,47 +73,16 @@ class _AddChannelDialog(QtWidgets.QDialog):
 
 
 class _ChannelDisplaySettingsDialog(QtWidgets.QDialog):
-    def __init__(self, parent, channel_mgr=None, channel_ind=None):
+    def __init__(self, parent, channel_mgr=None, channel=None):
         QtWidgets.QDialog.__init__(self, parent=parent)
         self.setWindowTitle("Display Channel Settings")
         self.cmgr = channel_mgr
-        self.channel_ind = channel_ind
-        self.channel = self.cmgr.active_channels[channel_ind]
+        self.channel = channel
 
         grid = QtWidgets.QGridLayout()
         grid.setRowMinimumHeight(1, 40)
         grid.setColumnMinimumWidth(2, 60)
         self.setLayout(grid)
-        
-        msg_types = self.channel.visible_types
-        
-        self.output_visible = QtWidgets.QCheckBox("OutputMessage") 
-        if msg_types[0]:
-            self.output_visible.setChecked(True)
-        grid.addWidget(self.output_visible, 0, 0)
-        
-        self.input_visible = QtWidgets.QCheckBox("InputMessage") 
-        if msg_types[1]:
-            self.input_visible.setChecked(True)
-        grid.addWidget(self.input_visible, 1, 0)
-
-        self.exception_visible = QtWidgets.QCheckBox("ExceptionMessage")
-        if msg_types[2]:
-            self.exception_visible.setChecked(True)
-        grid.addWidget(self.exception_visible, 2, 0)
-
-        display_types = self.channel.display_types
-        all_display_types = [ty.name for ty in DisplayType]
-       
-        self.displaytype_out = QtWidgets.QComboBox()
-        self.displaytype_out.addItems(all_display_types)
-        self.displaytype_out.setCurrentIndex(display_types[0])
-        grid.addWidget(self.displaytype_out, 0, 1)
-
-        self.displaytype_in = QtWidgets.QComboBox()
-        self.displaytype_in.addItems(all_display_types)
-        self.displaytype_in.setCurrentIndex(display_types[1])
-        grid.addWidget(self.displaytype_in, 1, 1)
 
         self.cancel = QtWidgets.QPushButton("Cancel")
         self.cancel.clicked.connect(self.close)
@@ -125,18 +93,6 @@ class _ChannelDisplaySettingsDialog(QtWidgets.QDialog):
         grid.addWidget(self.confirm, 3, 1)
     
     def _confirm_filter(self):
-        visible_types = (
-            self.output_visible.isChecked(),
-            self.input_visible.isChecked(),
-            self.exception_visible.isChecked()
-        )
-        self.channel.visible_types = visible_types
-        display_types = (
-            DisplayType[self.displaytype_out.currentText()].value,
-            DisplayType[self.displaytype_in.currentText()].value
-        )
-        self.channel.display_types = display_types
-        self.cmgr.active_channels[self.channel_ind] = self.channel
         self.cmgr.broadcast_active()
         self.close()
 
@@ -196,18 +152,16 @@ class _ActiveChannelList(QtWidgets.QListWidget):
     def _prepare_save_list(self):
         save_list = list()
         for channel in self.cmgr.active_channels:
-            channel_dict = asdict(channel)
-            save_list.append(channel_dict)
+            save_list.append(channel)
         return pyon.encode(save_list)
 
     def _read_save_list(self, save_list):
         self.clear()
         self.cmgr.active_channels = list()
         save_list = pyon.decode(save_list)
-        for channel_dict in save_list:
-            channel = Channel(**channel_dict)
+        for channel in save_list:
             self.cmgr.active_channels.append(channel)
-            self.addItem(channel.name)
+            self.addItem(channel)
         self.cmgr.broadcast_active()
 
     async def _save_list_task(self):
@@ -246,10 +200,9 @@ class _ActiveChannelList(QtWidgets.QListWidget):
 
     def _display_channel_settings(self):
         item = self.currentItem()
-        ind = self.row(item)
         dialog = _ChannelDisplaySettingsDialog(self, 
                                          channel_mgr=self.cmgr,
-                                         channel_ind=ind)
+                                         channel=item.text())
         dialog.open()
 
     def remove_channel(self):
@@ -314,7 +267,9 @@ class _WaveformWidget(pg.PlotWidget):
         pdi = self.plot(x_data,
                         y_data,
                         name=f"Channel: {channel}",
-                        pen=pen)
+                        pen=pen,
+                        symbol="x",
+                        stepMode="right")
         self._plots.append(pdi)
         return
 
@@ -329,6 +284,8 @@ class _ChannelManager(QtCore.QObject):
         self.data = dict()
         self.active_channels = list()
         self.channels = list()
+        self.ref_period = None
+        self.sys_clk = None
 
     def set_channel_active(self, name):
         selected = None
@@ -512,7 +469,7 @@ class _TraceManager:
                     if (desc["module"] == "artiq.coredevice.ttl"
                             and desc["class"] == "TTLClockGen"):
                         channel = desc["arguments"]["channel"]
-                        channel_parsers[channel] = TTLClockGenChannel(self.cmgr, name)
+                        channel_parsers[channel] = TTLClockGenChannel(self.cmgr, name, 1e-9) # TODO dont hardcode the ref_period
                     if (desc["module"] == "artiq.coredevice.ad9914"
                             and desc["class"] == "AD9914"):
                         dds_bus_channel = desc["arguments"]["bus_channel"]
@@ -520,7 +477,7 @@ class _TraceManager:
                         if dds_bus_channel in channel_parsers:
                             dds_handler = channel_parsers[dds_bus_channel]
                         else:
-                            dds_handler = DDSBusChannel(self.cmgr, dds_onehot_sel, dds_sysclk)
+                            dds_handler = DDSBusChannel(self.cmgr, 1, 1e9)
                             channel_parsers[dds_bus_channel] = dds_handler
                         dds_handler.add_dds_channel(name, dds_channel)
                     if (desc["module"] == "artiq.coredevice.spi2" and
@@ -586,16 +543,17 @@ class TTLChannel:
 
 
 class TTLClockGenChannel:
-    def __init__(self, channel_mgr, name):
+    def __init__(self, channel_mgr, name, ref_period):
         self.name = name
         self.cmgr = channel_mgr
+        self.ref_period = ref_period
         self.display_name = "ttl_clkgen/{}".format(name)
         self.cmgr.register_channel(self.display_name)
 
     def parse_message(self, message):
         msg_type = MessageType[message.__class__.__name__]
         if msg_type is MessageType.OutputMessage:
-            frequency = message.data / self.cmgr.ref_period / 2**24
+            frequency = message.data / self.ref_period / 2**24
             self.cmgr.set_value(self.display_name, frequency, message.timestamp)
 
 # most complicated, wait for last
@@ -659,8 +617,9 @@ class DDSBusChannel:
                     nm = dds_channel["phase_name"]
                     self.cmgr.set_value(nm, phase, message.timestamp)
 
-    def process_message(self, message):
-        if isinstance(message, OutputMessage):
+    def parse_message(self, message):
+        msg_type = MessageType[message.__class__.__name__]
+        if msg_type == MessageType.OutputMessage:
             self._decode_ad9914_write(message)
 
 
