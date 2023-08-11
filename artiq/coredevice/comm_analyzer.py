@@ -211,15 +211,15 @@ class WaveformManager:
     def get_channel(self, name, width):
         channel = WaveformChannel(name, self.cmgr)
         self.channels[name] = channel
-        self.cmgr.channels.append(name) #TODO make smarter, ignore if exist etc, make orderedset or smth
+        self.cmgr.channels.add(name) #TODO make smarter, ignore if exist etc, make orderedset or smth
         return channel
     
     @contextmanager
     def scope(self, name):
-        pass
+        yield
 
     def set_time(self, time):
-        for channel in self.channels:
+        for channel in self.channels.values():
             channel.set_time(time)
 
 
@@ -235,7 +235,7 @@ class TTLHandler:
             logger.debug("TTL write @%d %d to %d, name: %s",
                 message.timestamp, message.data, message.address, self.name)
             if message.address == 0:
-                self.last_value = str(message.data)
+                self.last_value = message.data
                 if self.oe:
                     self.channel_value.set_value(self.last_value)
             elif message.address == 1:
@@ -247,7 +247,7 @@ class TTLHandler:
         elif isinstance(message, InputMessage):
             logger.debug("TTL read  @%d %d, name: %s",
                 message.timestamp, message.data, self.name)
-            self.channel_value.set_value(str(message.data))
+            self.channel_value.set_value(message.data)
 
 
 class TTLClockGenHandler:
@@ -336,8 +336,8 @@ class WishboneHandler:
         self.stb = vcd_manager.get_channel("{}/{}".format(name, "stb"), 1)
 
     def process_message(self, message):
-        self.stb.set_value("1")
-        self.stb.set_value("0")
+        self.stb.set_value(1)
+        self.stb.set_value(0)
         if isinstance(message, OutputMessage):
             logger.debug("Wishbone out @%d adr=0x%02x data=0x%08x",
                          message.timestamp, message.address, message.data)
@@ -376,22 +376,19 @@ class SPIMasterHandler(WishboneHandler):
 
     def process_write(self, address, data):
         if address == 0:
-            self.channels["write"].set_value("{:032b}".format(data))
+            self.channels["write"].set_value(data)
         elif address == 1:
-            self.channels["chip_select"].set_value(
-                    "{:08b}".format(data & 0xffff))
-            self.channels["write_length"].set_value(
-                    "{:08b}".format(data >> 16 & 0xff))
-            self.channels["read_length"].set_value(
-                    "{:08b}".format(data >> 24 & 0xff))
+            self.channels["chip_select"].set_value(data & 0xffff)
+            self.channels["write_length"].set_value(data >> 16 & 0xff)
+            self.channels["read_length"].set_value(data >> 24 & 0xff)
         elif address == 2:
-            self.channels["config"].set_value("{:032b}".format(data))
+            self.channels["config"].set_value(data)
         else:
             raise ValueError("bad address %d", address)
 
     def process_read(self, address, data, read_slack):
         if address == 0:
-            self.channels["read"].set_value("{:032b}".format(data))
+            self.channels["read"].set_value(data)
         else:
             raise ValueError("bad address %d", address)
 
@@ -413,26 +410,22 @@ class SPIMaster2Handler(WishboneHandler):
                         "{}/{}".format(name, reg_name), reg_width)
 
     def process_message(self, message):
-        self.stb.set_value("1")
-        self.stb.set_value("0")
+        self.stb.set_value(1)
+        self.stb.set_value(0)
         if isinstance(message, OutputMessage):
             data = message.data
             address = message.address
             if address == 1:
                 logger.debug("SPI config @%d data=0x%08x",
                          message.timestamp, data)
-                self.channels["chip_select"].set_value(
-                        "{:08b}".format(data >> 24))
-                self.channels["div"].set_value(
-                        "{:08b}".format(data >> 16 & 0xff))
-                self.channels["length"].set_value(
-                        "{:08b}".format(data >> 8 & 0x1f))
-                self.channels["flags"].set_value(
-                        "{:08b}".format(data & 0xff))
+                self.channels["chip_select"].set_value(data >> 24)
+                self.channels["div"].set_value(data >> 16 & 0xff)
+                self.channels["length"].set_value(data >> 8 & 0x1f)
+                self.channels["flags"].set_value(data & 0xff)
             elif address == 0:
                 logger.debug("SPI write @%d data=0x%08x",
                          message.timestamp, data)
-                self.channels["write"].set_value("{:032b}".format(data))
+                self.channels["write"].set_value(data)
             else:
                 raise ValueError("bad address", address)
             # process untimed reads and insert them here
@@ -441,7 +434,7 @@ class SPIMaster2Handler(WishboneHandler):
                 read = self._reads.pop(0)
                 logger.debug("SPI read @%d data=0x%08x",
                             read.rtio_counter, read.data)
-                self.channels["read"].set_value("{:032b}".format(read.data))
+                self.channels["read"].set_value(read.data)
         elif isinstance(message, InputMessage):
             self._reads.append(message)
 

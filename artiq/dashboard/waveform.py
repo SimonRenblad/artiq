@@ -8,7 +8,7 @@ from sipyco import pyon
 
 from artiq.tools import exc_to_warning
 from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
-from artiq.coredevice.comm_analyzer import decode_dump
+from artiq.coredevice.comm_analyzer import decode_dump, decoded_dump_to_waveform
 
 from enum import Enum
 from operator import itemgetter
@@ -68,7 +68,7 @@ class _AddChannelDialog(QtWidgets.QDialog):
 
     def update_channels(self):
         self.waveform_channel_list.clear()
-        for channel in self.cmgr.channels:
+        for channel in sorted(self.cmgr.channels):
             self.waveform_channel_list.addItem(channel)
 
 
@@ -98,7 +98,6 @@ class _ChannelDisplaySettingsDialog(QtWidgets.QDialog):
 
 
 class _ActiveChannelList(QtWidgets.QListWidget):
-
     def __init__(self, channel_mgr):
         QtWidgets.QListWidget.__init__(self)
         self.cmgr = channel_mgr
@@ -206,11 +205,14 @@ class _ActiveChannelList(QtWidgets.QListWidget):
         dialog.open()
 
     def remove_channel(self):
-        item = self.currentItem()
-        ind = self.row(item)
-        self.takeItem(ind)
-        self.cmgr.active_channels.pop(ind)
-        self.cmgr.broadcast_active()
+        try:
+            item = self.currentItem()
+            ind = self.row(item)
+            self.takeItem(ind)
+            self.cmgr.active_channels.pop(ind)
+            self.cmgr.broadcast_active()
+        except:
+            pass
 
     def add_channel(self, name):
         self.addItem(name)
@@ -250,28 +252,23 @@ class _WaveformWidget(pg.PlotWidget):
 
         for channel in self.cmgr.active_channels:
             self._display_waveform(channel)
-    
-    @staticmethod
-    def _convert_type(data, display_type):
-        if display_type == DisplayType.INT_64:
-            return data
-        if display_type == DisplayType.FLOAT_64:
-            return struct.unpack('>d', struct.pack('>Q', data))[0]
 
     def _display_waveform(self, channel):
         data = self.cmgr.data[channel]
         if len(data) == 0:
             return
         y_data, x_data = zip(*data)
-        pen = {'color': "r", 'width': 1}
-        pdi = self.plot(x_data,
-                        y_data,
-                        name=f"Channel: {channel}",
-                        pen=pen,
-                        symbol="x",
-                        stepMode="right")
-        self._plots.append(pdi)
-        return
+        pen = {'color': len(self._plots), 'width': 1}
+        try:
+            pdi = self.plot(x_data,
+                            y_data,
+                            name=f"Channel: {channel}",
+                            pen=pen,
+                            symbol="x",
+                            stepMode="right")
+            self._plots.append(pdi)
+        except:
+            logger.error(f"Waveform display failed for {str(data)}")
 
 
 class _ChannelManager(QtCore.QObject):
@@ -283,7 +280,7 @@ class _ChannelManager(QtCore.QObject):
         QtCore.QObject.__init__(self) 
         self.data = dict()
         self.active_channels = list()
-        self.channels = list()
+        self.channels = set()
         self.ref_period = None
         self.sys_clk = None
 
@@ -317,7 +314,7 @@ class _ChannelManager(QtCore.QObject):
 
     def register_channel(self, channel):
         self.data.setdefault(channel, [])
-        self.channels.append(channel)
+        self.channels.add(channel)
 
 
 class _TraceManager:
@@ -357,8 +354,7 @@ class _TraceManager:
     def _update_from_dump(self, dump):
         self.dump = dump
         decoded_dump = decode_dump(dump)
-        messages = decoded_dump.messages
-        self._parse_messages(messages)
+        decoded_dump_to_waveform(self.cmgr, self.ddb, decoded_dump)
         self.cmgr.traceDataChanged.emit()
         self.dump_updated.set()
 
@@ -458,38 +454,12 @@ class _TraceManager:
 
     def update_ddb(self, mod):
         devices = self.ddb
-        channel_parsers = dict()
-        for name, desc in sorted(devices.items(), key=itemgetter(0)):
+        for name, desc in devices.items():
             if isinstance(desc, dict):
-                if desc["type"] == "local":
-                    if (desc["module"] == "artiq.coredevice.ttl"
-                            and desc["class"] in {"TTLOut", "TTLInOut"}):
-                        channel = desc["arguments"]["channel"]
-                        channel_parsers[channel] = TTLChannel(self.cmgr, name)
-                    if (desc["module"] == "artiq.coredevice.ttl"
-                            and desc["class"] == "TTLClockGen"):
-                        channel = desc["arguments"]["channel"]
-                        channel_parsers[channel] = TTLClockGenChannel(self.cmgr, name, 1e-9) # TODO dont hardcode the ref_period
-                    if (desc["module"] == "artiq.coredevice.ad9914"
-                            and desc["class"] == "AD9914"):
-                        dds_bus_channel = desc["arguments"]["bus_channel"]
-                        dds_channel = desc["arguments"]["channel"]
-                        if dds_bus_channel in channel_parsers:
-                            dds_handler = channel_parsers[dds_bus_channel]
-                        else:
-                            dds_handler = DDSBusChannel(self.cmgr, 1, 1e9)
-                            channel_parsers[dds_bus_channel] = dds_handler
-                        dds_handler.add_dds_channel(name, dds_channel)
-                    if (desc["module"] == "artiq.coredevice.spi2" and
-                            desc["class"] == "SPIMaster"):
-                        channel = desc["arguments"]["channel"]
-                        channel_parsers[channel] = SPI2Channel(self.cmgr, name)
-                elif desc["type"] == "controller" and name == "core_analyzer":
+                if desc["type"] == "controller" and name == "core_analyzer":
                     self.rtio_addr = desc["host"]
                     self.rtio_port = desc.get("port_proxy", 1382)
                     self.rtio_port_control = desc.get("port_proxy_control", 1385)
-        self.channel_parsers = channel_parsers
-        self.cmgr.traceDataChanged.emit() # change to other signal
         if self.rtio_addr is not None:
             self.proxy_reconnect.set()
     
@@ -514,166 +484,6 @@ class _TraceManager:
                 task = asyncio.ensure_future(exc_to_warning(self.ccb_pull_helper(**kwargs)))
         except:
             logger.error("failed to process CCB", exc_info=True)
-
-
-class TTLChannel:
-    def __init__(self, channel_mgr, name):
-        self.name = name
-        self.display_name = "ttl/{}".format(name)
-        self.cmgr = channel_mgr
-        self.cmgr.register_channel(self.display_name)
-        self.last_value = -1
-        self.oe = True
-
-    def parse_message(self, message):
-        msg_type = MessageType[message.__class__.__name__]
-        if msg_type is MessageType.OutputMessage:
-            if message.address == 0:
-                self.last_value = message.data
-                if self.oe:
-                    self.cmgr.set_value(self.display_name, self.last_value, message.timestamp)
-            elif message.address == 1:
-                self.oe = bool(message.data)
-                if self.oe:
-                    self.cmgr.set_value(self.display_name, self.last_value, message.timestamp)
-                else:
-                    self.cmgr.set_value(self.display_name, -1, message.timestamp)
-        elif msg_type is MessageType.InputMessage:
-            self.cmgr.data[self.display_name].append((message.data, message.timestamp))
-
-
-class TTLClockGenChannel:
-    def __init__(self, channel_mgr, name, ref_period):
-        self.name = name
-        self.cmgr = channel_mgr
-        self.ref_period = ref_period
-        self.display_name = "ttl_clkgen/{}".format(name)
-        self.cmgr.register_channel(self.display_name)
-
-    def parse_message(self, message):
-        msg_type = MessageType[message.__class__.__name__]
-        if msg_type is MessageType.OutputMessage:
-            frequency = message.data / self.ref_period / 2**24
-            self.cmgr.set_value(self.display_name, frequency, message.timestamp)
-
-# most complicated, wait for last
-class DDSBusChannel:
-    def __init__(self, channel_mgr, onehot_sel, sysclk):
-        self.cmgr = channel_mgr
-        self.onehot_sel = onehot_sel
-        self.sysclk = sysclk
-
-        self.selected_dds_channels = set()
-        self.dds_channels = dict()
-
-    def add_dds_channel(self, name, dds_channel_nr):
-        dds_channel = dict()
-        nm = "dds/{}".format(name)
-        nm_freq = "{}/frequency".format(nm)
-        nm_phase = "{}/phase".format(nm)
-        dds_channel["freq_name"] = nm_freq
-        dds_channel["phase_name"] = nm_phase
-        dds_channel["ftw"] = [None, None]
-        dds_channel["pow"] = None
-        self.cmgr.register_channel(nm_freq)
-        self.cmgr.register_channel(nm_phase)
-        self.dds_channels[dds_channel_nr] = dds_channel
-
-    def _gpio_to_channels(self, gpio):
-        gpio >>= 1  # strip reset
-        if self.onehot_sel:
-            r = set()
-            nr = 0
-            mask = 1
-            while gpio >= mask:
-                if gpio & mask:
-                    r.add(nr)
-                nr += 1
-                mask *= 2
-            return r
-        else:
-            return {gpio}
-
-    def _decode_ad9914_write(self, message):
-        if message.address == 0x81:
-            self.selected_dds_channels = self._gpio_to_channels(message.data)
-        for dds_channel_nr in self.selected_dds_channels:
-            dds_channel = self.dds_channels[dds_channel_nr]
-            if message.address == 0x11:
-                dds_channel["ftw"][0] = message.data
-            elif message.address == 0x13:
-                dds_channel["ftw"][1] = message.data
-            elif message.address == 0x31:
-                dds_channel["pow"] = message.data
-            elif message.address == 0x80:  # FUD
-                if None not in dds_channel["ftw"]:
-                    ftw = sum(x << i*16
-                              for i, x in enumerate(dds_channel["ftw"]))
-                    frequency = ftw * self.sysclk / 2**32
-                    nm = dds_channel["freq_name"]
-                    self.cmgr.set_value(nm, frequency, message.timestamp)
-                if dds_channel["pow"] is not None:
-                    phase = dds_channel["pow"] / 2**16
-                    nm = dds_channel["phase_name"]
-                    self.cmgr.set_value(nm, phase, message.timestamp)
-
-    def parse_message(self, message):
-        msg_type = MessageType[message.__class__.__name__]
-        if msg_type == MessageType.OutputMessage:
-            self._decode_ad9914_write(message)
-
-
-class SPI2Channel:
-    def __init__(self, channel_mgr, name):
-        self.name = name
-        self.cmgr = channel_mgr
-        self.display_name = "spi2/{}".format(name)
-        self.exts = [
-            "stb",
-            "chip_select",
-            "div",
-            "length",
-            "flags",
-            "read",
-            "write"
-        ]
-        self.paths = dict()
-        for ext in self.exts:
-            nm = "{}/{}".format(self.display_name, ext)
-            self.paths[ext] = nm
-            self.cmgr.register_channel(nm)
-        self._reads = []
-
-    def parse_message(self, message):
-        nm = self.paths["stb"]
-        self.cmgr.set_value(nm, 1, message.timestamp)
-        self.cmgr.set_value(nm, 0, message.timestamp)
-        msg_type = MessageType[message.__class__.__name__]
-        if msg_type is MessageType.OutputMessage:
-            data = message.data
-            address = message.address
-            if address == 1:
-                p = dict()
-                p["chip_select"] = data >> 24
-                p["div"] = data >> 16 & 0xff
-                p["length"] = data >> 8 & 0x1f
-                p["flags"] = data & 0xff
-                for key, value in p.items():
-                    nm = self.paths[key]
-                    self.cmgr.set_value(nm, value, message.timestamp)
-            elif address == 0:
-                nm = self.paths["write"]
-                self.cmgr.set_value(nm, data, message.timestamp)
-            else:
-                raise ValueError("bad address", address)
-            # process untimed reads and insert them here
-            nm = self.paths["read"]
-            while (self._reads and
-                   self._reads[0].rtio_counter < message.timestamp):
-                read = self._reads.pop(0)
-                self.cmgr.set_value(nm, read.data, message.timestamp)
-        elif msg_type is MessageType.InputMessage:
-            self._reads.append(message)
 
 
 class WaveformDock(QtWidgets.QDockWidget):
