@@ -25,14 +25,14 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
+# Potentially use the other Enums
 class MessageType(Enum):
     OutputMessage = 0
     InputMessage = 1
     ExceptionMessage = 2
     StoppedMessage = 3
 
-
+# Can remove
 class DisplayType(Enum):
     INT_64 = 0
     FLOAT_64 = 1
@@ -72,31 +72,6 @@ class _AddChannelDialog(QtWidgets.QDialog):
             self.waveform_channel_list.addItem(channel)
 
 
-class _ChannelDisplaySettingsDialog(QtWidgets.QDialog):
-    def __init__(self, parent, channel_mgr=None, channel=None):
-        QtWidgets.QDialog.__init__(self, parent=parent)
-        self.setWindowTitle("Display Channel Settings")
-        self.cmgr = channel_mgr
-        self.channel = channel
-
-        grid = QtWidgets.QGridLayout()
-        grid.setRowMinimumHeight(1, 40)
-        grid.setColumnMinimumWidth(2, 60)
-        self.setLayout(grid)
-
-        self.cancel = QtWidgets.QPushButton("Cancel")
-        self.cancel.clicked.connect(self.close)
-        grid.addWidget(self.cancel, 3, 0)
-
-        self.confirm = QtWidgets.QPushButton("Confirm")
-        self.confirm.clicked.connect(self._confirm_filter)
-        grid.addWidget(self.confirm, 3, 1)
-    
-    def _confirm_filter(self):
-        self.cmgr.broadcast_active()
-        self.close()
-
-
 class _ActiveChannelList(QtWidgets.QListWidget):
     def __init__(self, channel_mgr):
         QtWidgets.QListWidget.__init__(self)
@@ -116,14 +91,6 @@ class _ActiveChannelList(QtWidgets.QListWidget):
         add_channel_action.setShortcut("CTRL+N")
         add_channel_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel_action)
-
-        # Message type to display
-        display_settings_action = QtWidgets.QAction("Display channel settings...", self)
-        display_settings_action.triggered.connect(self._display_channel_settings)
-        display_settings_action.setShortcut("RETURN")
-        display_settings_action.setShortcutContext(Qt.WidgetShortcut)
-        self.addAction(display_settings_action)
-        self.itemDoubleClicked.connect(lambda item: self._display_channel_settings())
 
         # Save list 
         save_list_action = QtWidgets.QAction("Save active list...", self)
@@ -148,6 +115,21 @@ class _ActiveChannelList(QtWidgets.QListWidget):
 
         self.cmgr.addActiveChannelSignal.connect(self.add_channel)
 
+    def remove_channel(self):
+        try:
+            item = self.currentItem()
+            ind = self.row(item)
+            self.takeItem(ind)
+            self.cmgr.active_channels.pop(ind)
+            self.cmgr.broadcast_active()
+        except:
+            pass
+
+    def add_channel(self, name):
+        self.addItem(name)
+        self.cmgr.active_channels.append(name)
+        self.cmgr.broadcast_active()
+
     def _prepare_save_list(self):
         save_list = list()
         for channel in self.cmgr.active_channels:
@@ -163,6 +145,7 @@ class _ActiveChannelList(QtWidgets.QListWidget):
             self.addItem(channel)
         self.cmgr.broadcast_active()
 
+    #set defaults
     async def _save_list_task(self):
         try:
             filename = await get_save_file_name(
@@ -203,21 +186,6 @@ class _ActiveChannelList(QtWidgets.QListWidget):
                                          channel_mgr=self.cmgr,
                                          channel=item.text())
         dialog.open()
-
-    def remove_channel(self):
-        try:
-            item = self.currentItem()
-            ind = self.row(item)
-            self.takeItem(ind)
-            self.cmgr.active_channels.pop(ind)
-            self.cmgr.broadcast_active()
-        except:
-            pass
-
-    def add_channel(self, name):
-        self.addItem(name)
-        self.cmgr.active_channels.append(name)
-        self.cmgr.broadcast_active()
 
 
 class _WaveformWidget(pg.PlotWidget):
@@ -281,8 +249,6 @@ class _ChannelManager(QtCore.QObject):
         self.data = dict()
         self.active_channels = list()
         self.channels = set()
-        self.ref_period = None
-        self.sys_clk = None
 
     def set_channel_active(self, name):
         selected = None
@@ -333,23 +299,6 @@ class _TraceManager:
         self.dump_updated = asyncio.Event()
         self.reconnect_task = None
         self.channel_parsers = dict()
-
-    # parsing and loading dump
-    def _parse_messages(self, messages):
-        # check for stopped message
-        for message in messages:
-            if message.__class__.__name__ == "StoppedMessage":
-                continue
-            self._parse_message(message)
-
-    def _parse_message(self, message):
-        msg_type = MessageType[message.__class__.__name__]
-        channel = message.channel
-        parser = self.channel_parsers.get(channel)
-        if parser is not None:
-            parser.parse_message(message)
-        else:
-            logger.warn("Message received from unknown channel, please define all channels in device_db.py")
 
     def _update_from_dump(self, dump):
         self.dump = dump
@@ -504,21 +453,24 @@ class WaveformDock(QtWidgets.QDockWidget):
                 QtWidgets.QApplication.style().standardIcon(
                     QtWidgets.QStyle.SP_DialogOpenButton))
         grid.addWidget(self.load_trace_button, 0, 0)
-        self.load_trace_button.clicked.connect(self._load_trace_clicked)
+        self.load_trace_button.clicked.connect(
+                lambda: asyncio.ensure_future(self.tm._load_trace_task()))
 
         self.save_trace_button = QtWidgets.QPushButton("Save Trace")
         self.save_trace_button.setIcon(
                 QtWidgets.QApplication.style().standardIcon(
                     QtWidgets.QStyle.SP_DriveFDIcon))
         grid.addWidget(self.save_trace_button, 0, 1)
-        self.save_trace_button.clicked.connect(self._save_trace_clicked)
+        self.save_trace_button.clicked.connect(
+                lambda: asyncio.ensure_future(self.tm._save_trace_task()))
 
         self.pull_button = QtWidgets.QPushButton("Pull from Device Buffer")
         self.pull_button.setIcon(
                 QtWidgets.QApplication.style().standardIcon(
                     QtWidgets.QStyle.SP_ArrowUp))
         grid.addWidget(self.pull_button, 0, 2)
-        self.pull_button.clicked.connect(self._pull_from_device_clicked)
+        self.pull_button.clicked.connect(
+                lambda: asyncio.ensure_future(self.tm._pull_from_device_task()))
 
         self.x_coord_label = QtWidgets.QLabel("x:")
         self.x_coord_label.setFont(QtGui.QFont("Monospace", 10))
@@ -537,12 +489,3 @@ class WaveformDock(QtWidgets.QDockWidget):
     def update_coord_label(self, coord_x, coord_y):
         self.x_coord_label.setText(f"x: {coord_x:.10g}")
         self.y_coord_label.setText(f"y: {coord_y:.10g}")
-
-    def _load_trace_clicked(self):
-        asyncio.ensure_future(self.tm._load_trace_task())
-
-    def _save_trace_clicked(self):
-        asyncio.ensure_future(self.tm._save_trace_task())
-    
-    def _pull_from_device_clicked(self):
-        asyncio.ensure_future(self.tm._pull_from_device_task())
