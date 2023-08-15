@@ -180,7 +180,6 @@ class VCDManager:
             self.current_time = time
 
 
-# Reuse the handlers for display in dashboard waveform
 class WaveformChannel:
     def __init__(self, name, cmgr=None):
         self.current_time = 0
@@ -470,7 +469,7 @@ class LogHandler:
                 self.current_entry = ""
 
 
-def get_vcd_log_channels(log_channel, messages):
+def get_log_channels(log_channel, messages):
     vcd_log_channels = dict()
     log_entry = ""
     for message in messages:
@@ -550,18 +549,18 @@ def get_message_time(message):
 
 def decoded_dump_to_vcd(fileobj, devices, dump, uniform_interval=False):
     vcd_manager = VCDManager(fileobj)
-    _process_dump(vcd_manager, devices, dump, uniform_interval)
+    _dump_to_target(vcd_manager, devices, dump, uniform_interval)
 
 def decoded_dump_to_waveform(channel_mgr, devices, dump, uniform_interval=False):
     manager = WaveformManager(channel_mgr)
-    _process_dump(manager, devices, dump, uniform_interval)
+    _dump_to_target(manager, devices, dump, uniform_interval)
 
-def _process_dump(vcd_manager, devices, dump, uniform_interval):
+def _dump_to_target(manager, devices, dump, uniform_interval):
     ref_period = get_ref_period(devices)
 
     if ref_period is not None:
         if not uniform_interval:
-            vcd_manager.set_timescale_ps(ref_period*1e12)
+            manager.set_timescale_ps(ref_period*1e12)
     else:
         logger.warning("unable to determine core device ref_period")
         ref_period = 1e-9  # guess
@@ -578,20 +577,20 @@ def _process_dump(vcd_manager, devices, dump, uniform_interval):
     messages = sorted(messages, key=get_message_time)
 
     channel_handlers = create_channel_handlers(
-        vcd_manager, devices, ref_period,
+        manager, devices, ref_period,
         dds_sysclk, dump.dds_onehot_sel)
-    vcd_log_channels = get_vcd_log_channels(dump.log_channel, messages)
+    log_channels = get_log_channels(dump.log_channel, messages)
     channel_handlers[dump.log_channel] = LogHandler(
-        vcd_manager, vcd_log_channels)
+        manager, log_channels)
     if uniform_interval:
         # RTIO event timestamp in machine units
-        timestamp = vcd_manager.get_channel("timestamp", 64)
+        timestamp = manager.get_channel("timestamp", 64)
         # RTIO time interval between this and the next timed event
         # in SI seconds
-        interval = vcd_manager.get_channel("interval", 64)
-    slack = vcd_manager.get_channel("rtio_slack", 64)
+        interval = manager.get_channel("interval", 64)
+    slack = manager.get_channel("rtio_slack", 64)
 
-    vcd_manager.set_time(0)
+    manager.set_time(0)
     start_time = 0
     for m in messages:
         start_time = get_message_time(m)
@@ -605,11 +604,11 @@ def _process_dump(vcd_manager, devices, dump, uniform_interval):
             if t >= 0:
                 if uniform_interval:
                     interval.set_value_double((t - t0)*ref_period)
-                    vcd_manager.set_time(i)
+                    manager.set_time(i)
                     timestamp.set_value(t)
                     t0 = t
                 else:
-                    vcd_manager.set_time(t)
+                    manager.set_time(t)
             channel_handlers[message.channel].process_message(message)
             if isinstance(message, OutputMessage):
                 slack.set_value_double(
