@@ -186,24 +186,21 @@ class _ActiveChannelList(QtWidgets.QListWidget):
         dialog.open()
 
 
-class _WaveformWidget(pg.PlotWidget):
+class _WaveformWidget(pg.GraphicsLayoutWidget):
     mouseMoved = QtCore.pyqtSignal(float, float)
 
     def __init__(self, parent=None, channel_mgr=None):
-        pg.PlotWidget.__init__(self, parent=parent)
-        self.addLegend()
-        self.showGrid(True, True, 0.5)
-        self.setLabel('bottom', text='time', units='s') # TODO: necessary?
+        pg.GraphicsLayoutWidget.__init__(self, parent=parent)
         self.cmgr = channel_mgr
         self.cmgr.activeChannelsChanged.connect(self.refresh_display)
         self.cmgr.traceDataChanged.connect(self.refresh_display)
         self._plots = list()
         self.refresh_display()
-        self.proxy = pg.SignalProxy(self.scene().sigMouseMoved, rateLimit=60, slot=self.get_cursor_coordinates)
+        #self.proxy = pg.SignalProxy(self.scene().sigMouseMoved, rateLimit=60, slot=self.get_cursor_coordinates)
 
-    def get_cursor_coordinates(self, event):
-        mousePoint = self.getPlotItem().vb.mapSceneToView(event[0])
-        self.mouseMoved.emit(mousePoint.x(), mousePoint.y())
+    #def get_cursor_coordinates(self, event):
+    #    mousePoint = self.getPlotItem().vb.mapSceneToView(event[0])
+    #    self.mouseMoved.emit(mousePoint.x(), mousePoint.y())
     
     def refresh_display(self):
         start = time.monotonic()
@@ -212,9 +209,6 @@ class _WaveformWidget(pg.PlotWidget):
         logger.info(f"Refresh took {(end - start)*1000} ms")
 
     def _display_graph(self):
-        for plot in self._plots:
-            self.removeItem(plot)
-        self._plots = list()
         for channel in self.cmgr.active_channels:
             self._display_waveform(channel)
 
@@ -225,15 +219,17 @@ class _WaveformWidget(pg.PlotWidget):
         y_data, x_data = zip(*data)
         pen = {'color': len(self._plots), 'width': 1}
         try:
-            pdi = self.plot(x_data,
-                            y_data,
-                            name=f"Channel: {channel}",
-                            pen=pen,
-                            symbol="x",
-                            stepMode="right") # step mode can be altered?
+            pi = self.addPlot(row=len(self._plots), col=0)
+
+            pdi = pi.plot(x_data,
+                          y_data,
+                          name=f"Channel: {channel}",
+                          pen=pen,
+                          symbol="x",
+                          stepMode="right")
             self._plots.append(pdi)
         except:
-            logger.error(f"Waveform display failed for {str(data)}")
+            logger.error(f"Waveform display failed for {str(data)}", exc_info=1)
 
 
 class _ChannelManager(QtCore.QObject):
