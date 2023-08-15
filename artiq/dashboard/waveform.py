@@ -32,11 +32,6 @@ class MessageType(Enum):
     ExceptionMessage = 2
     StoppedMessage = 3
 
-# Can remove
-class DisplayType(Enum):
-    INT_64 = 0
-    FLOAT_64 = 1
-
 
 class _AddChannelDialog(QtWidgets.QDialog):
 
@@ -87,21 +82,24 @@ class _ActiveChannelList(QtWidgets.QListWidget):
         # Add channel
         self.add_channel_dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
         add_channel_action = QtWidgets.QAction("Add channel...", self)
-        add_channel_action.triggered.connect(lambda: self.add_channel_dialog.open())
+        add_channel_action.triggered.connect(
+                lambda: self.add_channel_dialog.open())
         add_channel_action.setShortcut("CTRL+N")
         add_channel_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel_action)
 
         # Save list 
         save_list_action = QtWidgets.QAction("Save active list...", self)
-        save_list_action.triggered.connect(lambda: asyncio.ensure_future(self._save_list_task()))
+        save_list_action.triggered.connect(
+                lambda: asyncio.ensure_future(self._save_list_task()))
         save_list_action.setShortcut("CTRL+S")
         save_list_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(save_list_action)
 
         # Load list
         load_list_action = QtWidgets.QAction("Load active list...", self)
-        load_list_action.triggered.connect(lambda: asyncio.ensure_future(self._load_list_task()))
+        load_list_action.triggered.connect(
+                lambda: asyncio.ensure_future(self._load_list_task()))
         load_list_action.setShortcut("CTRL+L")
         load_list_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(load_list_action)
@@ -217,7 +215,6 @@ class _WaveformWidget(pg.PlotWidget):
         for plot in self._plots:
             self.removeItem(plot)
         self._plots = list()
-
         for channel in self.cmgr.active_channels:
             self._display_waveform(channel)
 
@@ -233,7 +230,7 @@ class _WaveformWidget(pg.PlotWidget):
                             name=f"Channel: {channel}",
                             pen=pen,
                             symbol="x",
-                            stepMode="right")
+                            stepMode="right") # step mode can be altered?
             self._plots.append(pdi)
         except:
             logger.error(f"Waveform display failed for {str(data)}")
@@ -249,15 +246,6 @@ class _ChannelManager(QtCore.QObject):
         self.data = dict()
         self.active_channels = list()
         self.channels = set()
-
-    def set_channel_active(self, name):
-        selected = None
-        for channel in self.channels:
-            if channel[0] == name:
-                selected = channel
-                break
-        new_active_channel = Channel(name, id)
-        self.active_channels.append(new_active_channel)
 
     def get_channel_name(self, id):
         for channel in self.channels:
