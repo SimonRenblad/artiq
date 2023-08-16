@@ -14,6 +14,7 @@ from enum import Enum
 from operator import itemgetter
 import numpy as np
 import pyqtgraph as pg
+from pyqtgraph import metaarray
 import collections
 import math
 import itertools
@@ -186,15 +187,26 @@ class _ActiveChannelList(QtWidgets.QListWidget):
         dialog.open()
 
 
-class _WaveformWidget(pg.GraphicsLayoutWidget):
+class _WaveformWidget(QtWidgets.QWidget):
     mouseMoved = QtCore.pyqtSignal(float, float)
 
     def __init__(self, parent=None, channel_mgr=None):
-        pg.GraphicsLayoutWidget.__init__(self, parent=parent)
+        QtWidgets.QWidget.__init__(self, parent=parent)
+        self.plot_layout = QtWidgets.QVBoxLayout()
+        self.plot_layout.setSpacing(0)
+        scroll_area = QtWidgets.QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        widget = QtWidgets.QWidget()
+        widget.setLayout(self.plot_layout)
+        scroll_area.setWidget(widget)
+        main_layout = QtWidgets.QVBoxLayout()
+        main_layout.addWidget(scroll_area)
+        self.setLayout(main_layout)
         self.cmgr = channel_mgr
         self.cmgr.activeChannelsChanged.connect(self.refresh_display)
         self.cmgr.traceDataChanged.connect(self.refresh_display)
         self._plots = list()
+        self.plot_widgets = list()
         self.refresh_display()
         #self.proxy = pg.SignalProxy(self.scene().sigMouseMoved, rateLimit=60, slot=self.get_cursor_coordinates)
 
@@ -219,15 +231,25 @@ class _WaveformWidget(pg.GraphicsLayoutWidget):
         y_data, x_data = zip(*data)
         pen = {'color': len(self._plots), 'width': 1}
         try:
-            pi = self.addPlot(row=len(self._plots), col=0)
-
-            pdi = pi.plot(x_data,
-                          y_data,
-                          name=f"Channel: {channel}",
-                          pen=pen,
-                          symbol="x",
-                          stepMode="right")
-            self._plots.append(pdi)
+            is_new = True
+            for key, val in self._plots:
+                if key == channel:
+                    val.listDataItems()[0].setData(x=x_data, y=y_data)
+                    is_new = False
+            if is_new:
+                pi = pg.PlotItem(x=x_data,
+                                 y=y_data,
+                                 pen=pen,
+                                 symbol="x",
+                                 stepMode="right")
+                pi.showGrid(x=True, y=True)
+                pi.setTitle(channel)
+                pi.getAxis("left").setStyle(tickTextWidth=100, autoExpandTextSpace=False)
+                pw = pg.PlotWidget(plotItem=pi)
+                pw.setMinimumHeight(200)
+                self.plot_layout.addWidget(pw)
+                #self.plot_widgets.append(pw)
+                self._plots.append((channel, pi))
         except:
             logger.error(f"Waveform display failed for {str(data)}", exc_info=1)
 
