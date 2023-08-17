@@ -59,7 +59,7 @@ class _AddChannelDialog(QtWidgets.QDialog):
                 lambda: self.add_channel(self.waveform_channel_list.currentItem()))
 
     def add_channel(self, channel):
-        self.parent.add_channel(channel.text())
+        self.parent.addPlot(channel.text())
         self.close()
 
     def update_channels(self):
@@ -68,18 +68,171 @@ class _AddChannelDialog(QtWidgets.QDialog):
             self.waveform_channel_list.addItem(channel)
 
 
-class _ActiveChannelList(QtWidgets.QListWidget):
-    def __init__(self, channel_mgr):
-        QtWidgets.QListWidget.__init__(self)
-        self.cmgr = channel_mgr
-        self.active_channels = []
-        
-        self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
-        self.setDragEnabled(True)
-        self.setDropIndicatorShown(True)
-        self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
+#class _ActiveChannelList(QtWidgets.QListWidget):
+#    def __init__(self, channel_mgr):
+#        QtWidgets.QListWidget.__init__(self)
+#        self.cmgr = channel_mgr
+#        self.active_channels = []
+#        
+#        self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+#        self.setDragEnabled(True)
+#        self.setDropIndicatorShown(True)
+#        self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
+#        self.setContextMenuPolicy(Qt.ActionsContextMenu)
+#       
+#        # Add channel
+#        self.add_channel_dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
+#        add_channel_action = QtWidgets.QAction("Add channel...", self)
+#        add_channel_action.triggered.connect(
+#                lambda: self.add_channel_dialog.open())
+#        add_channel_action.setShortcut("CTRL+N")
+#        add_channel_action.setShortcutContext(Qt.WidgetShortcut)
+#        self.addAction(add_channel_action)
+#
+#        # Save list 
+#        save_list_action = QtWidgets.QAction("Save active list...", self)
+#        save_list_action.triggered.connect(
+#                lambda: asyncio.ensure_future(self._save_list_task()))
+#        save_list_action.setShortcut("CTRL+S")
+#        save_list_action.setShortcutContext(Qt.WidgetShortcut)
+#        self.addAction(save_list_action)
+#
+#        # Load list
+#        load_list_action = QtWidgets.QAction("Load active list...", self)
+#        load_list_action.triggered.connect(
+#                lambda: asyncio.ensure_future(self._load_list_task()))
+#        load_list_action.setShortcut("CTRL+L")
+#        load_list_action.setShortcutContext(Qt.WidgetShortcut)
+#        self.addAction(load_list_action)
+#
+#        # Remove channel
+#        remove_channel_action = QtWidgets.QAction("Delete channel", self)
+#        remove_channel_action.triggered.connect(self.remove_channel)
+#        remove_channel_action.setShortcut("DEL")
+#        remove_channel_action.setShortcutContext(Qt.WidgetShortcut)
+#        self.addAction(remove_channel_action)
+#
+#        self.cmgr.addActiveChannelSignal.connect(self.add_channel)
+#
+#    def remove_channel(self):
+#        try:
+#            item = self.currentItem()
+#            ind = self.row(item)
+#            self.takeItem(ind)
+#            self.cmgr.active_channels.pop(ind)
+#            self.cmgr.broadcast_active()
+#        except:
+#            pass
+#
+#    def add_channel(self, name):
+#        self.addItem(name)
+#        self.cmgr.active_channels.append(name)
+#        self.cmgr.broadcast_active()
+#
+#    def _prepare_save_list(self):
+#        save_list = list()
+#        for channel in self.cmgr.active_channels:
+#            save_list.append(channel)
+#        return pyon.encode(save_list)
+#
+#    def _read_save_list(self, save_list):
+#        self.clear()
+#        self.cmgr.active_channels = list()
+#        save_list = pyon.decode(save_list)
+#        for channel in save_list:
+#            self.cmgr.active_channels.append(channel)
+#            self.addItem(channel)
+#        self.cmgr.broadcast_active()
+#
+#    #set defaults
+#    async def _save_list_task(self):
+#        try:
+#            filename = await get_save_file_name(
+#                    self,
+#                    "Save Channel List",
+#                    "c://",
+#                    "PYON files (*.pyon)",
+#                    suffix="pyon")
+#        except asyncio.CancelledError:
+#            return
+#        try:
+#            save_list = self._prepare_save_list()
+#            with open(filename, 'w') as f:
+#                f.write(save_list)
+#        except:
+#            logger.error("Failed to save channel list",
+#                         exc_info=True)
+#
+#    async def _load_list_task(self):
+#        try:
+#            filename = await get_open_file_name(
+#                    self,
+#                    "Load Channel List",
+#                    "c://",
+#                    "PYON files (*.pyon)")
+#        except asyncio.CancelledError:
+#            return
+#        try:
+#            with open(filename, 'r') as f:
+#                self._read_save_list(f.read())
+#        except:
+#            logger.error("Failed to read channel list.",
+#                         exc_info=True)
+#
+#    def _display_channel_settings(self):
+#        item = self.currentItem()
+#        dialog = _ChannelDisplaySettingsDialog(self, 
+#                                         channel_mgr=self.cmgr,
+#                                         channel=item.text())
+#        dialog.open()
+
+class _ChannelWidget(QtWidgets.QWidget):
+
+    def __init__(self, channel, parent=None):
+        QtWidgets.QWidget.__init__(self, parent=parent)
+        self.channel = channel
+        self.parent = parent
+        self.setMinimumHeight(300)
+        layout = QtWidgets.QHBoxLayout()
+        self.setLayout(layout)
+        self.label = QtWidgets.QLabel(channel)
+        layout.addWidget(self.label)
+        pen = {'color': 'r', 'width': 1}
+        pi = pg.PlotItem(x=np.zeros(1),
+                                  y=np.zeros(1),
+                                  pen=pen,
+                                  symbol="x",
+                                  stepMode="right")
+        pi.showGrid(x=True, y=True)
+        pi.getAxis("left").setStyle(tickTextWidth=100, autoExpandTextSpace=False)
+        self.waveform = pg.PlotWidget(plotItem=pi)
+        layout.addWidget(self.waveform)
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
-       
+        remove_channel_action = QtWidgets.QAction("Delete channel", self)
+        remove_channel_action.triggered.connect(self.remove_channel)
+        remove_channel_action.setShortcut("DEL")
+        remove_channel_action.setShortcutContext(Qt.WidgetShortcut)
+        self.addAction(remove_channel_action)
+
+    def load_data(self, data):
+        try:
+            y_data, x_data = zip(*data)
+            self.waveform.getPlotItem().listDataItems()[0].setData(x=x_data, y=y_data)
+        except:
+            logger.warn("Unable to load data for {}".format(self.channel))
+
+    def remove_channel(self):
+        ind = self.parent.plot_widgets.index(self)
+        self.parent.removePlot(ind)
+
+class _WaveformWidget(QtWidgets.QWidget):
+    mouseMoved = QtCore.pyqtSignal(float, float)
+
+    def __init__(self, parent=None, channel_mgr=None):
+        QtWidgets.QWidget.__init__(self, parent=parent)
+        self.setContextMenuPolicy(Qt.ActionsContextMenu)
+        self.cmgr = channel_mgr
+
         # Add channel
         self.add_channel_dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
         add_channel_action = QtWidgets.QAction("Add channel...", self)
@@ -89,109 +242,6 @@ class _ActiveChannelList(QtWidgets.QListWidget):
         add_channel_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel_action)
 
-        # Save list 
-        save_list_action = QtWidgets.QAction("Save active list...", self)
-        save_list_action.triggered.connect(
-                lambda: asyncio.ensure_future(self._save_list_task()))
-        save_list_action.setShortcut("CTRL+S")
-        save_list_action.setShortcutContext(Qt.WidgetShortcut)
-        self.addAction(save_list_action)
-
-        # Load list
-        load_list_action = QtWidgets.QAction("Load active list...", self)
-        load_list_action.triggered.connect(
-                lambda: asyncio.ensure_future(self._load_list_task()))
-        load_list_action.setShortcut("CTRL+L")
-        load_list_action.setShortcutContext(Qt.WidgetShortcut)
-        self.addAction(load_list_action)
-
-        # Remove channel
-        remove_channel_action = QtWidgets.QAction("Delete channel", self)
-        remove_channel_action.triggered.connect(self.remove_channel)
-        remove_channel_action.setShortcut("DEL")
-        remove_channel_action.setShortcutContext(Qt.WidgetShortcut)
-        self.addAction(remove_channel_action)
-
-        self.cmgr.addActiveChannelSignal.connect(self.add_channel)
-
-    def remove_channel(self):
-        try:
-            item = self.currentItem()
-            ind = self.row(item)
-            self.takeItem(ind)
-            self.cmgr.active_channels.pop(ind)
-            self.cmgr.broadcast_active()
-        except:
-            pass
-
-    def add_channel(self, name):
-        self.addItem(name)
-        self.cmgr.active_channels.append(name)
-        self.cmgr.broadcast_active()
-
-    def _prepare_save_list(self):
-        save_list = list()
-        for channel in self.cmgr.active_channels:
-            save_list.append(channel)
-        return pyon.encode(save_list)
-
-    def _read_save_list(self, save_list):
-        self.clear()
-        self.cmgr.active_channels = list()
-        save_list = pyon.decode(save_list)
-        for channel in save_list:
-            self.cmgr.active_channels.append(channel)
-            self.addItem(channel)
-        self.cmgr.broadcast_active()
-
-    #set defaults
-    async def _save_list_task(self):
-        try:
-            filename = await get_save_file_name(
-                    self,
-                    "Save Channel List",
-                    "c://",
-                    "PYON files (*.pyon)",
-                    suffix="pyon")
-        except asyncio.CancelledError:
-            return
-        try:
-            save_list = self._prepare_save_list()
-            with open(filename, 'w') as f:
-                f.write(save_list)
-        except:
-            logger.error("Failed to save channel list",
-                         exc_info=True)
-
-    async def _load_list_task(self):
-        try:
-            filename = await get_open_file_name(
-                    self,
-                    "Load Channel List",
-                    "c://",
-                    "PYON files (*.pyon)")
-        except asyncio.CancelledError:
-            return
-        try:
-            with open(filename, 'r') as f:
-                self._read_save_list(f.read())
-        except:
-            logger.error("Failed to read channel list.",
-                         exc_info=True)
-
-    def _display_channel_settings(self):
-        item = self.currentItem()
-        dialog = _ChannelDisplaySettingsDialog(self, 
-                                         channel_mgr=self.cmgr,
-                                         channel=item.text())
-        dialog.open()
-
-
-class _WaveformWidget(QtWidgets.QWidget):
-    mouseMoved = QtCore.pyqtSignal(float, float)
-
-    def __init__(self, parent=None, channel_mgr=None):
-        QtWidgets.QWidget.__init__(self, parent=parent)
         self.plot_layout = QtWidgets.QVBoxLayout()
         self.plot_layout.setSpacing(0)
         scroll_area = QtWidgets.QScrollArea()
@@ -202,62 +252,61 @@ class _WaveformWidget(QtWidgets.QWidget):
         main_layout = QtWidgets.QVBoxLayout()
         main_layout.addWidget(scroll_area)
         self.setLayout(main_layout)
-        self.cmgr = channel_mgr
-        self.cmgr.activeChannelsChanged.connect(self.refresh_display)
+        self.cmgr.addActiveChannelSignal.connect(self.addPlot)
+        self.cmgr.removeActiveChannelSignal.connect(self.removePlot)
+        self.cmgr.insertActiveChannelSignal.connect(self.insertPlot)
         self.cmgr.traceDataChanged.connect(self.refresh_display)
         self._plots = list()
         self.plot_widgets = list()
-        self.refresh_display()
-        #self.proxy = pg.SignalProxy(self.scene().sigMouseMoved, rateLimit=60, slot=self.get_cursor_coordinates)
 
-    #def get_cursor_coordinates(self, event):
-    #    mousePoint = self.getPlotItem().vb.mapSceneToView(event[0])
-    #    self.mouseMoved.emit(mousePoint.x(), mousePoint.y())
+    def addPlot(self, channel):
+        start = time.monotonic()
+        channel_widget = _ChannelWidget(channel, parent=self)
+        if channel in self.cmgr.data:
+            channel_widget.load_data(self.cmgr.data[channel])
+        self.plot_layout.addWidget(channel_widget)
+        self.plot_widgets.append(channel_widget)
+        end = time.monotonic()
+        logger.info(f"Add channel took {(end - start)*1000} ms")
+
+    def insertPlot(self, channel, index):
+        start = time.monotonic()
+        channel_widget = _ChannelWidget(channel, parent=self)
+        if channel in self.cmgr.data:
+            channel_widget.load_data(self.cmgr.data[channel])
+        self.plot_layout.insertWidget(index, channel_widget)
+        self.plot_widgets.insert(index, channel_widget)
+        end = time.monotonic()
+        logger.info(f"Insert channel took {(end - start)*1000} ms")
+
+    def removePlot(self, index):
+        widget = self.plot_layout.takeAt(index)
+        self.plot_widgets.pop(index)
+        widget.widget().deleteLater()
     
     def refresh_display(self):
         start = time.monotonic()
-        self._display_graph()
+        for widget in self.plot_widgets:
+            channel = widget.channel
+            data = self.cmgr.data[channel]
+            widget.load_data(data)
         end = time.monotonic()
         logger.info(f"Refresh took {(end - start)*1000} ms")
 
-    def _display_graph(self):
-        for channel in self.cmgr.active_channels:
-            self._display_waveform(channel)
-
-    def _display_waveform(self, channel):
-        data = self.cmgr.data[channel]
-        if len(data) == 0:
-            return
-        y_data, x_data = zip(*data)
-        pen = {'color': len(self._plots), 'width': 1}
+    def remove_channel(self):
         try:
-            is_new = True
-            for key, val in self._plots:
-                if key == channel:
-                    val.listDataItems()[0].setData(x=x_data, y=y_data)
-                    is_new = False
-            if is_new:
-                pi = pg.PlotItem(x=x_data,
-                                 y=y_data,
-                                 pen=pen,
-                                 symbol="x",
-                                 stepMode="right")
-                pi.showGrid(x=True, y=True)
-                pi.setTitle(channel)
-                pi.getAxis("left").setStyle(tickTextWidth=100, autoExpandTextSpace=False)
-                pw = pg.PlotWidget(plotItem=pi)
-                pw.setMinimumHeight(200)
-                self.plot_layout.addWidget(pw)
-                #self.plot_widgets.append(pw)
-                self._plots.append((channel, pi))
+            item = self.currentItem()
+            ind = self.row(item)
+            self.removePlot(ind)
         except:
-            logger.error(f"Waveform display failed for {str(data)}", exc_info=1)
+            pass
 
 
 class _ChannelManager(QtCore.QObject):
-    activeChannelsChanged = QtCore.pyqtSignal()
     traceDataChanged = QtCore.pyqtSignal()
     addActiveChannelSignal = QtCore.pyqtSignal(str)
+    removeActiveChannelSignal = QtCore.pyqtSignal(int)
+    insertActiveChannelSignal = QtCore.pyqtSignal(str, int)
 
     def __init__(self):
         QtCore.QObject.__init__(self) 
@@ -274,9 +323,6 @@ class _ChannelManager(QtCore.QObject):
         for channel in self.channels:
             if channel[0] == name:
                 return channel[1]
-
-    def broadcast_active(self):
-        self.activeChannelsChanged.emit()
 
     def broadcast_data(self):
         self.traceDataChanged.emit()
@@ -478,20 +524,5 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.pull_button.clicked.connect(
                 lambda: asyncio.ensure_future(self.tm._pull_from_device_task()))
 
-        self.x_coord_label = QtWidgets.QLabel("x:")
-        self.x_coord_label.setFont(QtGui.QFont("Monospace", 10))
-        grid.addWidget(self.x_coord_label, 1, 2, colspan=1)
-
-        self.y_coord_label = QtWidgets.QLabel("y:")
-        self.y_coord_label.setFont(QtGui.QFont("Monospace", 10))
-        grid.addWidget(self.y_coord_label, 1, 3, colspan=9)
-        
-        self.waveform_active_channel_view = _ActiveChannelList(channel_mgr=self.cmgr)
-        grid.addWidget(self.waveform_active_channel_view, 2, 0, colspan=2)
         self.waveform_widget = _WaveformWidget(channel_mgr=self.cmgr) 
-        grid.addWidget(self.waveform_widget, 2, 2, colspan=10)
-        self.waveform_widget.mouseMoved.connect(self.update_coord_label)
-
-    def update_coord_label(self, coord_x, coord_y):
-        self.x_coord_label.setText(f"x: {coord_x:.10g}")
-        self.y_coord_label.setText(f"y: {coord_y:.10g}")
+        grid.addWidget(self.waveform_widget, 2, 0, colspan=12)
