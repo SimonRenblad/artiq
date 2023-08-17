@@ -68,67 +68,6 @@ class _AddChannelDialog(QtWidgets.QDialog):
             self.waveform_channel_list.addItem(channel)
 
 
-#class _ActiveChannelList(QtWidgets.QListWidget):
-#    def __init__(self, channel_mgr):
-#        QtWidgets.QListWidget.__init__(self)
-#        self.cmgr = channel_mgr
-#        self.active_channels = []
-#        
-#        self.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
-#        self.setDragEnabled(True)
-#        self.setDropIndicatorShown(True)
-#        self.setDragDropMode(QtWidgets.QAbstractItemView.InternalMove)
-#        self.setContextMenuPolicy(Qt.ActionsContextMenu)
-#       
-#        # Add channel
-#        self.add_channel_dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
-#        add_channel_action = QtWidgets.QAction("Add channel...", self)
-#        add_channel_action.triggered.connect(
-#                lambda: self.add_channel_dialog.open())
-#        add_channel_action.setShortcut("CTRL+N")
-#        add_channel_action.setShortcutContext(Qt.WidgetShortcut)
-#        self.addAction(add_channel_action)
-#
-#        # Save list 
-#        save_list_action = QtWidgets.QAction("Save active list...", self)
-#        save_list_action.triggered.connect(
-#                lambda: asyncio.ensure_future(self._save_list_task()))
-#        save_list_action.setShortcut("CTRL+S")
-#        save_list_action.setShortcutContext(Qt.WidgetShortcut)
-#        self.addAction(save_list_action)
-#
-#        # Load list
-#        load_list_action = QtWidgets.QAction("Load active list...", self)
-#        load_list_action.triggered.connect(
-#                lambda: asyncio.ensure_future(self._load_list_task()))
-#        load_list_action.setShortcut("CTRL+L")
-#        load_list_action.setShortcutContext(Qt.WidgetShortcut)
-#        self.addAction(load_list_action)
-#
-#        # Remove channel
-#        remove_channel_action = QtWidgets.QAction("Delete channel", self)
-#        remove_channel_action.triggered.connect(self.remove_channel)
-#        remove_channel_action.setShortcut("DEL")
-#        remove_channel_action.setShortcutContext(Qt.WidgetShortcut)
-#        self.addAction(remove_channel_action)
-#
-#        self.cmgr.addActiveChannelSignal.connect(self.add_channel)
-#
-#    def remove_channel(self):
-#        try:
-#            item = self.currentItem()
-#            ind = self.row(item)
-#            self.takeItem(ind)
-#            self.cmgr.active_channels.pop(ind)
-#            self.cmgr.broadcast_active()
-#        except:
-#            pass
-#
-#    def add_channel(self, name):
-#        self.addItem(name)
-#        self.cmgr.active_channels.append(name)
-#        self.cmgr.broadcast_active()
-#
 #    def _prepare_save_list(self):
 #        save_list = list()
 #        for channel in self.cmgr.active_channels:
@@ -178,13 +117,6 @@ class _AddChannelDialog(QtWidgets.QDialog):
 #        except:
 #            logger.error("Failed to read channel list.",
 #                         exc_info=True)
-#
-#    def _display_channel_settings(self):
-#        item = self.currentItem()
-#        dialog = _ChannelDisplaySettingsDialog(self, 
-#                                         channel_mgr=self.cmgr,
-#                                         channel=item.text())
-#        dialog.open()
 
 class _ChannelWidget(QtWidgets.QWidget):
 
@@ -213,6 +145,12 @@ class _ChannelWidget(QtWidgets.QWidget):
         remove_channel_action.setShortcut("DEL")
         remove_channel_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(remove_channel_action)
+        move_up_action = QtWidgets.QAction("Move channel up", self)
+        move_up_action.triggered.connect(self.move_channel_up)
+        self.addAction(move_up_action)
+        move_down_action = QtWidgets.QAction("Move channel down", self)
+        move_down_action.triggered.connect(self.move_channel_down)
+        self.addAction(move_down_action)
 
     def load_data(self, data):
         try:
@@ -224,6 +162,14 @@ class _ChannelWidget(QtWidgets.QWidget):
     def remove_channel(self):
         ind = self.parent.plot_widgets.index(self)
         self.parent.removePlot(ind)
+
+    def move_channel_up(self):
+        ind = self.parent.plot_widgets.index(self)
+        self.parent.moveUp(ind)
+
+    def move_channel_down(self):
+        ind = self.parent.plot_widgets.index(self)
+        self.parent.moveDown(ind)
 
 class _WaveformWidget(QtWidgets.QWidget):
     mouseMoved = QtCore.pyqtSignal(float, float)
@@ -313,26 +259,6 @@ class _ChannelManager(QtCore.QObject):
         self.data = dict()
         self.active_channels = list()
         self.channels = set()
-
-    def get_channel_name(self, id):
-        for channel in self.channels:
-            if channel[1] == id:
-                return channel[0]
-
-    def get_channel_id(self, name):
-        for channel in self.channels:
-            if channel[0] == name:
-                return channel[1]
-
-    def broadcast_data(self):
-        self.traceDataChanged.emit()
-
-    def set_value(self, channel, value, time):
-        self.data[channel].append((value, time))
-
-    def register_channel(self, channel):
-        self.data.setdefault(channel, [])
-        self.channels.add(channel)
 
 
 class _TraceManager:
@@ -465,7 +391,7 @@ class _TraceManager:
             self.proxy_reconnect.set()
     
     # Experiment and applet handling
-    async def ccb_pull_helper(self, channels=None):
+    async def ccb_pull_trace(self, channels=None):
         try:
             await self.proxy_client.pull_from_device()
             await self.dump_updated.wait()
@@ -482,7 +408,7 @@ class _TraceManager:
             args = message["args"]
             kwargs = message["kwargs"]
             if service == "pull_trace_from_device":
-                task = asyncio.ensure_future(exc_to_warning(self.ccb_pull_helper(**kwargs)))
+                task = asyncio.ensure_future(exc_to_warning(self.ccb_pull_trace(**kwargs)))
         except:
             logger.error("failed to process CCB", exc_info=True)
 
