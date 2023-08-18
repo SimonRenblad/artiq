@@ -26,13 +26,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Potentially use the other Enums
-class MessageType(Enum):
-    OutputMessage = 0
-    InputMessage = 1
-    ExceptionMessage = 2
-    StoppedMessage = 3
-
 
 class _AddChannelDialog(QtWidgets.QDialog):
 
@@ -68,55 +61,6 @@ class _AddChannelDialog(QtWidgets.QDialog):
             self.waveform_channel_list.addItem(channel)
 
 
-#    def _prepare_save_list(self):
-#        save_list = list()
-#        for channel in self.cmgr.active_channels:
-#            save_list.append(channel)
-#        return pyon.encode(save_list)
-#
-#    def _read_save_list(self, save_list):
-#        self.clear()
-#        self.cmgr.active_channels = list()
-#        save_list = pyon.decode(save_list)
-#        for channel in save_list:
-#            self.cmgr.active_channels.append(channel)
-#            self.addItem(channel)
-#        self.cmgr.broadcast_active()
-#
-#    #set defaults
-#    async def _save_list_task(self):
-#        try:
-#            filename = await get_save_file_name(
-#                    self,
-#                    "Save Channel List",
-#                    "c://",
-#                    "PYON files (*.pyon)",
-#                    suffix="pyon")
-#        except asyncio.CancelledError:
-#            return
-#        try:
-#            save_list = self._prepare_save_list()
-#            with open(filename, 'w') as f:
-#                f.write(save_list)
-#        except:
-#            logger.error("Failed to save channel list",
-#                         exc_info=True)
-#
-#    async def _load_list_task(self):
-#        try:
-#            filename = await get_open_file_name(
-#                    self,
-#                    "Load Channel List",
-#                    "c://",
-#                    "PYON files (*.pyon)")
-#        except asyncio.CancelledError:
-#            return
-#        try:
-#            with open(filename, 'r') as f:
-#                self._read_save_list(f.read())
-#        except:
-#            logger.error("Failed to read channel list.",
-#                         exc_info=True)
 
 class _ChannelWidget(QtWidgets.QWidget):
 
@@ -171,6 +115,7 @@ class _ChannelWidget(QtWidgets.QWidget):
         ind = self.parent.plot_widgets.index(self)
         self.parent.moveDown(ind)
 
+
 class _WaveformWidget(QtWidgets.QWidget):
     mouseMoved = QtCore.pyqtSignal(float, float)
 
@@ -187,6 +132,22 @@ class _WaveformWidget(QtWidgets.QWidget):
         add_channel_action.setShortcut("CTRL+N")
         add_channel_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel_action)
+
+        # Load active list
+        load_actives_action = QtWidgets.QAction("Load active channels...", self)
+        load_actives_action.triggered.connect(
+                lambda: asyncio.ensure_future(self._load_list_task()))
+        load_actives_action.setShortcut("CTRL+L")
+        load_actives_action.setShortcutContext(Qt.WidgetShortcut)
+        self.addAction(load_actives_action)
+
+        # Save active list
+        save_actives_action = QtWidgets.QAction("Save active channels...", self)
+        save_actives_action.triggered.connect(
+                lambda: asyncio.ensure_future(self._save_list_task()))
+        save_actives_action.setShortcut("CTRL+S")
+        save_actives_action.setShortcutContext(Qt.WidgetShortcut)
+        self.addAction(save_actives_action)
 
         self.plot_layout = QtWidgets.QVBoxLayout()
         self.plot_layout.setSpacing(0)
@@ -239,13 +200,54 @@ class _WaveformWidget(QtWidgets.QWidget):
         end = time.monotonic()
         logger.info(f"Refresh took {(end - start)*1000} ms")
 
-    def remove_channel(self):
+    def _prepare_save_list(self):
+        save_list = list()
+        for widget in self.plot_widgets:
+            save_list.append(widget.channel)
+        return pyon.encode(save_list)
+
+    def _read_save_list(self, save_list):
+        save_list = pyon.decode(save_list)
+        for i in reversed(range(len(self.plot_widgets))):
+            self.removePlot(i)
+
+        for channel in save_list:
+            self.addPlot(channel)
+
+    #set defaults
+    async def _save_list_task(self):
         try:
-            item = self.currentItem()
-            ind = self.row(item)
-            self.removePlot(ind)
+            filename = await get_save_file_name(
+                    self,
+                    "Save Channel List",
+                    "c://",
+                    "PYON files (*.pyon)",
+                    suffix="pyon")
+        except asyncio.CancelledError:
+            return
+        try:
+            save_list = self._prepare_save_list()
+            with open(filename, 'w') as f:
+                f.write(save_list)
         except:
-            pass
+            logger.error("Failed to save channel list",
+                         exc_info=True)
+
+    async def _load_list_task(self):
+        try:
+            filename = await get_open_file_name(
+                    self,
+                    "Load Channel List",
+                    "c://",
+                    "PYON files (*.pyon)")
+        except asyncio.CancelledError:
+            return
+        try:
+            with open(filename, 'r') as f:
+                self._read_save_list(f.read())
+        except:
+            logger.error("Failed to read channel list.",
+                         exc_info=True)
 
 
 class _ChannelManager(QtCore.QObject):
