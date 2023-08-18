@@ -26,7 +26,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
+# rewrite to just return the name -> treat it like the async functions created before
 class _AddChannelDialog(QtWidgets.QDialog):
 
     def __init__(self, parent, channel_mgr=None):
@@ -52,7 +52,10 @@ class _AddChannelDialog(QtWidgets.QDialog):
                 lambda: self.add_channel(self.waveform_channel_list.currentItem()))
 
     def add_channel(self, channel):
-        self.parent.addPlot(channel.text())
+        if self.index is None:
+            self.parent.addPlot(channel.text())
+        else:
+            self.parent.insertPlot(channel.text(), self.index)
         self.close()
 
     def update_channels(self):
@@ -84,17 +87,20 @@ class _ChannelWidget(QtWidgets.QWidget):
         self.waveform = pg.PlotWidget(plotItem=pi)
         layout.addWidget(self.waveform)
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
-        remove_channel_action = QtWidgets.QAction("Delete channel", self)
-        remove_channel_action.triggered.connect(self.remove_channel)
-        remove_channel_action.setShortcut("DEL")
-        remove_channel_action.setShortcutContext(Qt.WidgetShortcut)
-        self.addAction(remove_channel_action)
+        insert_action = QtWidgets.QAction("Insert channel below...", self)
+        insert_action.triggered.connect(self.insert_channel)
+        self.addAction(insert_action)
         move_up_action = QtWidgets.QAction("Move channel up", self)
         move_up_action.triggered.connect(self.move_channel_up)
         self.addAction(move_up_action)
         move_down_action = QtWidgets.QAction("Move channel down", self)
         move_down_action.triggered.connect(self.move_channel_down)
         self.addAction(move_down_action)
+        remove_channel_action = QtWidgets.QAction("Delete channel", self)
+        remove_channel_action.triggered.connect(self.remove_channel)
+        remove_channel_action.setShortcut("DEL")
+        remove_channel_action.setShortcutContext(Qt.WidgetShortcut)
+        self.addAction(remove_channel_action)
 
     def load_data(self, data):
         try:
@@ -103,9 +109,9 @@ class _ChannelWidget(QtWidgets.QWidget):
         except:
             logger.warn("Unable to load data for {}".format(self.channel))
 
-    def remove_channel(self):
+    def insert_action(self):
         ind = self.parent.plot_widgets.index(self)
-        self.parent.removePlot(ind)
+        self.parent.insertPlot(channel, ind)
 
     def move_channel_up(self):
         ind = self.parent.plot_widgets.index(self)
@@ -114,6 +120,10 @@ class _ChannelWidget(QtWidgets.QWidget):
     def move_channel_down(self):
         ind = self.parent.plot_widgets.index(self)
         self.parent.moveDown(ind)
+
+    def remove_channel(self):
+        ind = self.parent.plot_widgets.index(self)
+        self.parent.removePlot(ind)
 
 
 class _WaveformWidget(QtWidgets.QWidget):
@@ -190,7 +200,19 @@ class _WaveformWidget(QtWidgets.QWidget):
         widget = self.plot_layout.takeAt(index)
         self.plot_widgets.pop(index)
         widget.widget().deleteLater()
+
+    def moveDown(self, index):
+        self.plot_layout.takeAt(index)
+        widget = self.plot_widgets.pop(index)
+        self.plot_layout.insertWidget(index+1, widget)
+        self.plot_widgets.insert(index+1, widget)
     
+    def moveUp(self, index):
+        self.plot_layout.takeAt(index)
+        widget = self.plot_widgets.pop(index)
+        self.plot_layout.insertWidget(index-1, widget)
+        self.plot_widgets.insert(index-1, widget)
+
     def refresh_display(self):
         start = time.monotonic()
         for widget in self.plot_widgets:
