@@ -65,7 +65,6 @@ class _ChannelWidget(QtWidgets.QWidget):
         self.channel = channel
         self.parent = parent
         self.setMinimumHeight(300)
-        self.setResizable(True)
         layout = QtWidgets.QHBoxLayout()
         self.setLayout(layout)
         self.label = QtWidgets.QLabel(channel)
