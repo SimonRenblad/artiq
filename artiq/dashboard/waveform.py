@@ -65,10 +65,12 @@ class _ChannelWidget(QtWidgets.QWidget):
         self.channel = channel
         self.parent = parent
         self.setMinimumHeight(300)
+        self.setResizable(True)
         layout = QtWidgets.QHBoxLayout()
         self.setLayout(layout)
         self.label = QtWidgets.QLabel(channel)
-        layout.addWidget(self.label)
+        self.label.setMinimumWidth(50)
+        layout.addWidget(self.label, 2)
         pen = {'color': 'r', 'width': 1}
         pi = pg.PlotItem(x=np.zeros(1),
                                   y=np.zeros(1),
@@ -78,7 +80,7 @@ class _ChannelWidget(QtWidgets.QWidget):
         pi.showGrid(x=True, y=True)
         pi.getAxis("left").setStyle(tickTextWidth=100, autoExpandTextSpace=False)
         self.waveform = pg.PlotWidget(plotItem=pi)
-        layout.addWidget(self.waveform)
+        layout.addWidget(self.waveform, 8)
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
         insert_action = QtWidgets.QAction("Insert channel below...", self)
         insert_action.triggered.connect(self.insert_channel)
@@ -151,7 +153,7 @@ class _WaveformWidget(QtWidgets.QWidget):
         self.addAction(save_actives_action)
 
         self.plot_layout = QtWidgets.QVBoxLayout()
-        self.plot_layout.setSpacing(0)
+        self.plot_layout.setSpacing(1)
         scroll_area = QtWidgets.QScrollArea()
         scroll_area.setWidgetResizable(True)
         widget = QtWidgets.QWidget()
