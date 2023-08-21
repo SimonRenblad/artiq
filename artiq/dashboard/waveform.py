@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 
 # rewrite to just return the name -> treat it like the async functions created before
 class _AddChannelDialog(QtWidgets.QDialog):
+    accepted = QtCore.pyqtSignal(str)
 
     def __init__(self, parent, channel_mgr=None):
         QtWidgets.QDialog.__init__(self, parent=parent)
@@ -42,26 +43,19 @@ class _AddChannelDialog(QtWidgets.QDialog):
         self.waveform_channel_list = QtWidgets.QListWidget()
         grid.addWidget(self.waveform_channel_list, 0, 0)
         self.waveform_channel_list.itemDoubleClicked.connect(self.add_channel)
-        self.cmgr.traceDataChanged.connect(self.update_channels)
+        for channel in sorted(self.cmgr.channels):
+            self.waveform_channel_list.addItem(channel)
 
         enter_action = QtWidgets.QAction("Add channel", self)
         enter_action.setShortcut("RETURN")
         enter_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(enter_action)
-        enter_action.triggered.connect(
-                lambda: self.add_channel(self.waveform_channel_list.currentItem()))
+        enter_action.triggered.connect(self.add_channel)
 
-    def add_channel(self, channel):
-        if self.index is None:
-            self.parent.addPlot(channel.text())
-        else:
-            self.parent.insertPlot(channel.text(), self.index)
+    def add_channel(self):
+        channel = self.waveform_channel_list.currentItem().text()
+        self.accepted.emit(channel)
         self.close()
-
-    def update_channels(self):
-        self.waveform_channel_list.clear()
-        for channel in sorted(self.cmgr.channels):
-            self.waveform_channel_list.addItem(channel)
 
 
 
@@ -109,9 +103,9 @@ class _ChannelWidget(QtWidgets.QWidget):
         except:
             logger.warn("Unable to load data for {}".format(self.channel))
 
-    def insert_action(self):
-        ind = self.parent.plot_widgets.index(self)
-        self.parent.insertPlot(channel, ind)
+    def insert_channel(self):
+        next_ind = self.parent.plot_widgets.index(self) + 1
+        self.parent.insertPlot(next_ind)
 
     def move_channel_up(self):
         ind = self.parent.plot_widgets.index(self)
@@ -135,10 +129,8 @@ class _WaveformWidget(QtWidgets.QWidget):
         self.cmgr = channel_mgr
 
         # Add channel
-        self.add_channel_dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
         add_channel_action = QtWidgets.QAction("Add channel...", self)
-        add_channel_action.triggered.connect(
-                lambda: self.add_channel_dialog.open())
+        add_channel_action.triggered.connect(self.addPlot)
         add_channel_action.setShortcut("CTRL+N")
         add_channel_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel_action)
@@ -169,32 +161,45 @@ class _WaveformWidget(QtWidgets.QWidget):
         main_layout = QtWidgets.QVBoxLayout()
         main_layout.addWidget(scroll_area)
         self.setLayout(main_layout)
-        self.cmgr.addActiveChannelSignal.connect(self.addPlot)
-        self.cmgr.removeActiveChannelSignal.connect(self.removePlot)
-        self.cmgr.insertActiveChannelSignal.connect(self.insertPlot)
         self.cmgr.traceDataChanged.connect(self.refresh_display)
         self._plots = list()
         self.plot_widgets = list()
 
-    def addPlot(self, channel):
-        start = time.monotonic()
+    def addPlot(self):
+        asyncio.ensure_future(self._add_plot_task())
+
+    async def _add_plot_task(self):
+        dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
+        fut = asyncio.Future()
+        def on_accept(s):
+            fut.set_result(s)
+        dialog.accepted.connect(on_accept)
+        dialog.open()
+        channel = await fut
+
         channel_widget = _ChannelWidget(channel, parent=self)
         if channel in self.cmgr.data:
             channel_widget.load_data(self.cmgr.data[channel])
         self.plot_layout.addWidget(channel_widget)
         self.plot_widgets.append(channel_widget)
-        end = time.monotonic()
-        logger.info(f"Add channel took {(end - start)*1000} ms")
 
-    def insertPlot(self, channel, index):
-        start = time.monotonic()
+    def insertPlot(self, index):
+        asyncio.ensure_future(self._insert_plot_task(index))
+
+    async def _insert_plot_task(self, index):
+        dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
+        fut = asyncio.Future()
+        def on_accept(s):
+            fut.set_result(s)
+        dialog.accepted.connect(on_accept)
+        dialog.open()
+        channel = await fut
+
         channel_widget = _ChannelWidget(channel, parent=self)
         if channel in self.cmgr.data:
             channel_widget.load_data(self.cmgr.data[channel])
         self.plot_layout.insertWidget(index, channel_widget)
         self.plot_widgets.insert(index, channel_widget)
-        end = time.monotonic()
-        logger.info(f"Insert channel took {(end - start)*1000} ms")
 
     def removePlot(self, index):
         widget = self.plot_layout.takeAt(index)
