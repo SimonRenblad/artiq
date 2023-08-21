@@ -58,7 +58,6 @@ class _AddChannelDialog(QtWidgets.QDialog):
         self.close()
 
 
-
 class _ChannelWidget(QtWidgets.QWidget):
 
     def __init__(self, channel, parent=None):
@@ -105,7 +104,7 @@ class _ChannelWidget(QtWidgets.QWidget):
 
     def insert_channel(self):
         next_ind = self.parent.plot_widgets.index(self) + 1
-        self.parent.insertPlot(next_ind)
+        self.parent.insertPlotDialog(next_ind)
 
     def move_channel_up(self):
         ind = self.parent.plot_widgets.index(self)
@@ -130,7 +129,7 @@ class _WaveformWidget(QtWidgets.QWidget):
 
         # Add channel
         add_channel_action = QtWidgets.QAction("Add channel...", self)
-        add_channel_action.triggered.connect(self.addPlot)
+        add_channel_action.triggered.connect(self.addPlotDialog)
         add_channel_action.setShortcut("CTRL+N")
         add_channel_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel_action)
@@ -165,41 +164,42 @@ class _WaveformWidget(QtWidgets.QWidget):
         self._plots = list()
         self.plot_widgets = list()
 
-    def addPlot(self):
-        asyncio.ensure_future(self._add_plot_task())
-
-    async def _add_plot_task(self):
+    async def _get_channel_from_dialog(self):
         dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
         fut = asyncio.Future()
         def on_accept(s):
             fut.set_result(s)
         dialog.accepted.connect(on_accept)
         dialog.open()
-        channel = await fut
+        return await fut
 
+    def _add_plot(self, channel):
         channel_widget = _ChannelWidget(channel, parent=self)
         if channel in self.cmgr.data:
             channel_widget.load_data(self.cmgr.data[channel])
         self.plot_layout.addWidget(channel_widget)
         self.plot_widgets.append(channel_widget)
 
-    def insertPlot(self, index):
-        asyncio.ensure_future(self._insert_plot_task(index))
+    async def _add_plot_task(self):
+        channel = await self._get_channel_from_dialog()
+        self._add_plot(channel)
 
-    async def _insert_plot_task(self, index):
-        dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
-        fut = asyncio.Future()
-        def on_accept(s):
-            fut.set_result(s)
-        dialog.accepted.connect(on_accept)
-        dialog.open()
-        channel = await fut
+    def addPlotDialog(self):
+        asyncio.ensure_future(self._add_plot_task())
 
+    def _insert_plot(self, channel, index):
         channel_widget = _ChannelWidget(channel, parent=self)
         if channel in self.cmgr.data:
             channel_widget.load_data(self.cmgr.data[channel])
         self.plot_layout.insertWidget(index, channel_widget)
         self.plot_widgets.insert(index, channel_widget)
+
+    async def _insert_plot_task(self, index):
+        channel = await self._get_channel_from_dialog()
+        self._insert_plot(channel, index)
+
+    def insertPlotDialog(self, index):
+        asyncio.ensure_future(self._insert_plot_task(index))
 
     def removePlot(self, index):
         widget = self.plot_layout.takeAt(index)
@@ -239,7 +239,7 @@ class _WaveformWidget(QtWidgets.QWidget):
             self.removePlot(i)
 
         for channel in save_list:
-            self.addPlot(channel)
+            self._add_plot(channel)
 
     #set defaults
     async def _save_list_task(self):
