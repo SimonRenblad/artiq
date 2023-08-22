@@ -67,8 +67,13 @@ class _ChannelWidget(QtWidgets.QWidget):
         self.channel = channel
         self.parent = parent
         self.setMinimumHeight(300)
+        frame_layout = QtWidgets.QVBoxLayout()
+        frame = QtWidgets.QFrame()
+        frame.setFrameShape(QtWidgets.QFrame.Box)
+        frame_layout.addWidget(frame)
+        self.setLayout(frame_layout)
         layout = QtWidgets.QHBoxLayout()
-        self.setLayout(layout)
+        frame.setLayout(layout)
         self.label = QtWidgets.QLabel(channel)
         self.label.setMinimumWidth(50)
         layout.addWidget(self.label, 2)
