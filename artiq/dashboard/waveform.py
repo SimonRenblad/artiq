@@ -69,11 +69,8 @@ class _ChannelWidget(QtWidgets.QWidget):
         self.label.setMinimumWidth(50)
         layout.addWidget(self.label, 2)
 
-        pen = {'color': 'r', 'width': 1}
         pi = pg.PlotItem(x=np.zeros(1),
                                   y=np.zeros(1),
-                                  pen=pen,
-                                  symbol="x",
                                   stepMode="right")
         pi.showGrid(x=True, y=True)
         pi.getAxis("left").setStyle(tickTextWidth=100, autoExpandTextSpace=False)
@@ -134,22 +131,6 @@ class _WaveformWidget(QtWidgets.QWidget):
         add_channel_action.setShortcut("CTRL+N")
         add_channel_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel_action)
-
-        # Load active list
-        load_actives_action = QtWidgets.QAction("Load active channels...", self)
-        load_actives_action.triggered.connect(
-                lambda: asyncio.ensure_future(self._load_list_task()))
-        load_actives_action.setShortcut("CTRL+L")
-        load_actives_action.setShortcutContext(Qt.WidgetShortcut)
-        self.addAction(load_actives_action)
-
-        # Save active list
-        save_actives_action = QtWidgets.QAction("Save active channels...", self)
-        save_actives_action.triggered.connect(
-                lambda: asyncio.ensure_future(self._save_list_task()))
-        save_actives_action.setShortcut("CTRL+S")
-        save_actives_action.setShortcutContext(Qt.WidgetShortcut)
-        self.addAction(save_actives_action)
 
         self.plot_layout = QtWidgets.QVBoxLayout()
         self.plot_layout.setSpacing(1)
@@ -453,29 +434,52 @@ class WaveformDock(QtWidgets.QDockWidget):
         grid = LayoutWidget()
         self.setWidget(grid)
 
-        self.load_trace_button = QtWidgets.QPushButton("Load Trace")
-        self.load_trace_button.setIcon(
+        self.menu_button = QtWidgets.QPushButton()
+        self.menu_button.setIcon(
                 QtWidgets.QApplication.style().standardIcon(
-                    QtWidgets.QStyle.SP_DialogOpenButton))
-        grid.addWidget(self.load_trace_button, 0, 0)
-        self.load_trace_button.clicked.connect(
-                lambda: asyncio.ensure_future(self.tm._load_trace_task()))
-
-        self.save_trace_button = QtWidgets.QPushButton("Save Trace")
-        self.save_trace_button.setIcon(
-                QtWidgets.QApplication.style().standardIcon(
-                    QtWidgets.QStyle.SP_DriveFDIcon))
-        grid.addWidget(self.save_trace_button, 0, 1)
-        self.save_trace_button.clicked.connect(
-                lambda: asyncio.ensure_future(self.tm._save_trace_task()))
-
-        self.pull_button = QtWidgets.QPushButton("Pull from Device Buffer")
+                    QtWidgets.QStyle.SP_FileDialogStart))
+        grid.addWidget(self.menu_button, 0, 0)
+        
+        self.pull_button = QtWidgets.QToolButton()
+        self.pull_button.setToolTip("Pull device buffer")
         self.pull_button.setIcon(
                 QtWidgets.QApplication.style().standardIcon(
-                    QtWidgets.QStyle.SP_ArrowUp))
-        grid.addWidget(self.pull_button, 0, 2)
+                    QtWidgets.QStyle.SP_BrowserReload))
+        grid.addWidget(self.pull_button, 0, 1)
         self.pull_button.clicked.connect(
                 lambda: asyncio.ensure_future(self.tm._pull_from_device_task()))
 
+
         self.waveform_widget = _WaveformWidget(channel_mgr=self.cmgr) 
         grid.addWidget(self.waveform_widget, 2, 0, colspan=12)
+        
+        file_menu = QtWidgets.QMenu()
+
+        # Add channel
+        add_channel_action = QtWidgets.QAction("Add channel...", self)
+        add_channel_action.triggered.connect(self.waveform_widget.add_plot_dialog)
+        file_menu.addAction(add_channel_action)
+
+        load_trace_action = QtWidgets.QAction("Load trace...", self)
+        load_trace_action.triggered.connect(
+                lambda: asyncio.ensure_future(self.tm._load_trace_task()))
+        file_menu.addAction(load_trace_action)
+
+        save_trace_action = QtWidgets.QAction("Save trace...", self)
+        save_trace_action.triggered.connect(
+                lambda: asyncio.ensure_future(self.tm._save_trace_task()))
+        file_menu.addAction(save_trace_action)
+
+        # Load active list
+        load_actives_action = QtWidgets.QAction("Load active channels...", self)
+        load_actives_action.triggered.connect(
+                lambda: asyncio.ensure_future(self.waveform_widget._load_list_task()))
+        file_menu.addAction(load_actives_action)
+
+        # Save active list
+        save_actives_action = QtWidgets.QAction("Save active channels...", self)
+        save_actives_action.triggered.connect(
+                lambda: asyncio.ensure_future(self.waveform_widget._save_list_task()))
+        file_menu.addAction(save_actives_action)
+
+        self.menu_button.setMenu(file_menu)
