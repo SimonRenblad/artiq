@@ -1,7 +1,6 @@
 from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtCore import Qt
 
-from sipyco.keepalive import async_open_connection
 from sipyco.sync_struct import Subscriber
 from sipyco.pc_rpc import AsyncioClient
 from sipyco import pyon
@@ -12,13 +11,8 @@ from artiq.coredevice.comm_analyzer import decode_dump, decoded_dump_to_waveform
 
 import numpy as np
 import pyqtgraph as pg
-import collections
-import math
-import itertools
 import asyncio
-import struct
 import time
-import atexit
 import logging
 
 logger = logging.getLogger(__name__)
@@ -39,7 +33,7 @@ class _AddChannelDialog(QtWidgets.QDialog):
         self.setLayout(grid)
 
         self.waveform_channel_list = QtWidgets.QListWidget()
-        grid.addWidget(self.waveform_channel_list, 0, 0)
+        grid.addWidget(self.waveform_channel_list, 0, 0, 1, 2)
         self.waveform_channel_list.itemDoubleClicked.connect(self.add_channel)
         for channel in sorted(self.cmgr.channels):
             self.waveform_channel_list.addItem(channel)
@@ -50,9 +44,19 @@ class _AddChannelDialog(QtWidgets.QDialog):
         self.addAction(enter_action)
         enter_action.triggered.connect(self.add_channel)
 
+        cancel_button = QtWidgets.QPushButton("Cancel")
+        cancel_button.clicked.connect(self.close)
+        grid.addWidget(cancel_button, 1, 0)
+
+        confirm_button = QtWidgets.QPushButton("Confirm")
+        confirm_button.clicked.connect(self.add_channel)
+        grid.addWidget(confirm_button, 1, 1)
+
+
     def add_channel(self):
-        channel = self.waveform_channel_list.currentItem().text()
-        self.accepted.emit(channel)
+        channel = self.waveform_channel_list.currentItem()
+        if channel is not None:
+            self.accepted.emit(channel.text())
         self.close()
 
 
@@ -398,7 +402,6 @@ class _TraceManager:
             self.proxy_reconnect.set()
     
     # Experiment and applet handling
-    # TODO update
     async def ccb_pull_trace(self, channels=None):
         try:
             await self.proxy_client.pull_from_device()
@@ -415,7 +418,7 @@ class _TraceManager:
             args = message["args"]
             kwargs = message["kwargs"]
             if service == "pull_trace_from_device":
-                task = asyncio.ensure_future(exc_to_warning(self.ccb_pull_trace(**kwargs)))
+                asyncio.ensure_future(exc_to_warning(self.ccb_pull_trace(*args, **kwargs)))
         except:
             logger.error("failed to process CCB", exc_info=True)
 
