@@ -143,10 +143,13 @@ class VCDChannel:
         self.fmt_string = "{" + ":0{}b".format(width) + "}"
 
     def set_value(self, value):
-        if len(self.width) > 1:
-            self.out.write("b" + str(value) + " " + self.code + "\n")
+        if value is None:
+            value = "X"
+        s = self.fmt_string.format(value)
+        if len(s) > 1:
+            self.out.write("b" + s + " " + self.code + "\n")
         else:
-            self.out.write(self.fmt_string.format(value) + self.code + "\n")
+            self.out.write(s + self.code + "\n")
 
     def set_value_double(self, x):
         integer_cast = struct.unpack(">Q", struct.pack(">d", x))[0]
