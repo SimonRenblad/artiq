@@ -70,8 +70,9 @@ class _ChannelWidget(QtWidgets.QWidget):
         layout.addWidget(self.label, 2)
 
         pi = pg.PlotItem(x=np.zeros(1),
-                                  y=np.zeros(1),
-                                  stepMode="right")
+                         y=np.zeros(1),
+                         pen="r",
+                         stepMode="right")
         pi.showGrid(x=True, y=True)
         pi.getAxis("left").setStyle(tickTextWidth=100, autoExpandTextSpace=False)
         self.waveform = pg.PlotWidget(plotItem=pi)
@@ -89,8 +90,6 @@ class _ChannelWidget(QtWidgets.QWidget):
         self.addAction(move_down_action)
         remove_channel_action = QtWidgets.QAction("Delete channel", self)
         remove_channel_action.triggered.connect(self.remove_channel)
-        remove_channel_action.setShortcut("DEL")
-        remove_channel_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(remove_channel_action)
 
     def load_data(self, data):
@@ -99,6 +98,7 @@ class _ChannelWidget(QtWidgets.QWidget):
             self.waveform.getPlotItem().listDataItems()[0].setData(x=x_data, y=y_data)
         except:
             logger.warn("Unable to load data for {}".format(self.channel))
+            self.waveform.getPlotItem().listDataItems()[0].setData(x=np.zeros(1), y=np.zeros(1))
 
     def insert_channel(self):
         next_ind = self.parent.plot_widgets.index(self) + 1
@@ -447,7 +447,6 @@ class WaveformDock(QtWidgets.QDockWidget):
         grid.addWidget(self.pull_button, 0, 1)
         self.pull_button.clicked.connect(
                 lambda: asyncio.ensure_future(self.tm._pull_from_device_task()))
-
 
         self.waveform_widget = _WaveformWidget(channel_mgr=self.cmgr) 
         grid.addWidget(self.waveform_widget, 2, 0, colspan=12)
