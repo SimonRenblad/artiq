@@ -242,7 +242,7 @@ class _WaveformWidget(QtWidgets.QWidget):
             logger.error("Failed to save channel list",
                          exc_info=True)
 
-    async def _load_list_task(self):
+    async def _open_list_task(self):
         try:
             filename = await get_open_file_name(
                     self,
@@ -266,7 +266,6 @@ class _ChannelManager(QtCore.QObject):
     def __init__(self):
         QtCore.QObject.__init__(self) 
         self.data = dict()
-        self.active_channels = list()
         self.channels = set()
 
 
@@ -293,7 +292,7 @@ class _TraceManager:
         self.cmgr.traceDataChanged.emit()
         self.dump_updated.set()
 
-    async def _load_trace_task(self):
+    async def _open_trace_task(self):
         try:
             filename = await get_open_file_name(
                     self.parent,
@@ -460,10 +459,10 @@ class WaveformDock(QtWidgets.QDockWidget):
         add_channel_action.triggered.connect(self.waveform_widget.add_plot_dialog)
         file_menu.addAction(add_channel_action)
 
-        load_trace_action = QtWidgets.QAction("Load trace...", self)
-        load_trace_action.triggered.connect(
-                lambda: asyncio.ensure_future(self.tm._load_trace_task()))
-        file_menu.addAction(load_trace_action)
+        open_trace_action = QtWidgets.QAction("Open trace...", self)
+        open_trace_action.triggered.connect(
+                lambda: asyncio.ensure_future(self.tm._open_trace_task()))
+        file_menu.addAction(open_trace_action)
 
         save_trace_action = QtWidgets.QAction("Save trace...", self)
         save_trace_action.triggered.connect(
@@ -471,15 +470,15 @@ class WaveformDock(QtWidgets.QDockWidget):
         file_menu.addAction(save_trace_action)
 
         # Load active list
-        load_actives_action = QtWidgets.QAction("Load active channels...", self)
-        load_actives_action.triggered.connect(
-                lambda: asyncio.ensure_future(self.waveform_widget._load_list_task()))
-        file_menu.addAction(load_actives_action)
+        open_list_action = QtWidgets.QAction("Open channel list...", self)
+        open_list_action.triggered.connect(
+                lambda: asyncio.ensure_future(self.waveform_widget._open_list_task()))
+        file_menu.addAction(open_list_action)
 
         # Save active list
-        save_actives_action = QtWidgets.QAction("Save active channels...", self)
-        save_actives_action.triggered.connect(
+        save_list_action = QtWidgets.QAction("Save channel list...", self)
+        save_list_action.triggered.connect(
                 lambda: asyncio.ensure_future(self.waveform_widget._save_list_task()))
-        file_menu.addAction(save_actives_action)
+        file_menu.addAction(save_list_action)
 
         self.menu_button.setMenu(file_menu)
