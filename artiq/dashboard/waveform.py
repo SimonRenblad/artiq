@@ -7,7 +7,7 @@ from sipyco import pyon
 
 from artiq.tools import exc_to_warning
 from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
-from artiq.coredevice.comm_analyzer import decode_dump, decoded_dump_to_waveform
+from artiq.coredevice.comm_analyzer import decode_dump, decoded_dump_to_waveform, decoded_dump_to_vcd
 
 import numpy as np
 import pyqtgraph as pg
@@ -87,19 +87,19 @@ class _ChannelWidget(QtWidgets.QWidget):
         self.waveform = pg.PlotWidget(plotItem=pi)
 
         layout.addWidget(self.waveform, 8)
-        self.setContextMenuPolicy(Qt.ActionsContextMenu)
+        self.label.setContextMenuPolicy(Qt.ActionsContextMenu)
         insert_action = QtWidgets.QAction("Insert channel below...", self)
         insert_action.triggered.connect(self.insert_channel)
-        self.addAction(insert_action)
+        self.label.addAction(insert_action)
         move_up_action = QtWidgets.QAction("Move channel up", self)
         move_up_action.triggered.connect(self.move_channel_up)
-        self.addAction(move_up_action)
+        self.label.addAction(move_up_action)
         move_down_action = QtWidgets.QAction("Move channel down", self)
         move_down_action.triggered.connect(self.move_channel_down)
-        self.addAction(move_down_action)
+        self.label.addAction(move_down_action)
         remove_channel_action = QtWidgets.QAction("Delete channel", self)
         remove_channel_action.triggered.connect(self.remove_channel)
-        self.addAction(remove_channel_action)
+        self.label.addAction(remove_channel_action)
 
     def load_data(self, data):
         try:
@@ -131,15 +131,7 @@ class _WaveformWidget(QtWidgets.QWidget):
 
     def __init__(self, parent=None, channel_mgr=None):
         QtWidgets.QWidget.__init__(self, parent=parent)
-        self.setContextMenuPolicy(Qt.ActionsContextMenu)
         self.cmgr = channel_mgr
-
-        # Add channel
-        add_channel_action = QtWidgets.QAction("Add channel...", self)
-        add_channel_action.triggered.connect(self.add_plot_dialog)
-        add_channel_action.setShortcut("CTRL+N")
-        add_channel_action.setShortcutContext(Qt.WidgetShortcut)
-        self.addAction(add_channel_action)
 
         self.plot_layout = QtWidgets.QVBoxLayout()
         self.plot_layout.setSpacing(1)
@@ -287,6 +279,7 @@ class _TraceManager:
         self.rtio_port = None
         self.rtio_port_control = None
         self.dump = None
+        self.decoded_dump = None
         self.subscriber = Subscriber("devices", self.init_ddb, self.update_ddb)
         self.proxy_client = AsyncioClient()
         self.trace_subscriber = Subscriber("rtio_trace", self.init_dump, self.update_dump) 
@@ -296,8 +289,8 @@ class _TraceManager:
 
     def _update_from_dump(self, dump):
         self.dump = dump
-        decoded_dump = decode_dump(dump)
-        decoded_dump_to_waveform(self.cmgr, self.ddb, decoded_dump)
+        self.decoded_dump = decode_dump(dump)
+        decoded_dump_to_waveform(self.cmgr, self.ddb, self.decoded_dump)
         self.cmgr.traceDataChanged.emit()
         self.dump_updated.set()
 
@@ -339,6 +332,21 @@ class _TraceManager:
             asyncio.ensure_future(exc_to_warning(self.proxy_client.pull_from_device()))
         except:
             logger.error("Pull from device failed, is proxy running?", exc_info=1)
+
+    async def _save_vcd_task(self):
+        try:
+            filename = await get_save_file_name(
+                    self.parent,
+                    "Save VCD",
+                    "c://",
+                    "Value Change Dump (*.vcd)")
+        except asyncio.CancelledError:
+            return
+        try:
+            with open(filename, 'w') as f:
+                decoded_dump_to_vcd(f, self.ddb, self.decoded_dump)
+        except:
+            logger.error("Failed to save dump to VCD", exc_info=1)
 
     # Proxy subscriber callbacks
     def init_dump(self, dump):
@@ -487,5 +495,11 @@ class WaveformDock(QtWidgets.QDockWidget):
         save_list_action.triggered.connect(
                 lambda: asyncio.ensure_future(self.waveform_widget._save_list_task()))
         file_menu.addAction(save_list_action)
+
+        # Save VCD
+        save_vcd_action = QtWidgets.QAction("Save VCD...", self)
+        save_vcd_action.triggered.connect(
+                lambda: asyncio.ensure_future(self.tm._save_vcd_task()))
+        file_menu.addAction(save_vcd_action)
 
         self.menu_button.setMenu(file_menu)
