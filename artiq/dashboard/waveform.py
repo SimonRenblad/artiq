@@ -10,11 +10,8 @@ from artiq.tools import exc_to_warning
 from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
 from artiq.coredevice.comm_analyzer import decode_dump, decoded_dump_to_waveform
 
-from enum import Enum
-from operator import itemgetter
 import numpy as np
 import pyqtgraph as pg
-from pyqtgraph import metaarray
 import collections
 import math
 import itertools
@@ -26,7 +23,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# rewrite to just return the name -> treat it like the async functions created before
 class _AddChannelDialog(QtWidgets.QDialog):
     accepted = QtCore.pyqtSignal(str)
 
@@ -36,10 +32,12 @@ class _AddChannelDialog(QtWidgets.QDialog):
         self.setWindowTitle("Add channel")   
         self.cmgr = channel_mgr
         self.parent = parent
+
         grid = QtWidgets.QGridLayout()
         grid.setRowMinimumHeight(1, 40)
         grid.setColumnMinimumWidth(2, 60)
         self.setLayout(grid)
+
         self.waveform_channel_list = QtWidgets.QListWidget()
         grid.addWidget(self.waveform_channel_list, 0, 0)
         self.waveform_channel_list.itemDoubleClicked.connect(self.add_channel)
@@ -70,6 +68,7 @@ class _ChannelWidget(QtWidgets.QWidget):
         self.label = QtWidgets.QLabel(channel)
         self.label.setMinimumWidth(50)
         layout.addWidget(self.label, 2)
+
         pen = {'color': 'r', 'width': 1}
         pi = pg.PlotItem(x=np.zeros(1),
                                   y=np.zeros(1),
@@ -79,6 +78,7 @@ class _ChannelWidget(QtWidgets.QWidget):
         pi.showGrid(x=True, y=True)
         pi.getAxis("left").setStyle(tickTextWidth=100, autoExpandTextSpace=False)
         self.waveform = pg.PlotWidget(plotItem=pi)
+
         layout.addWidget(self.waveform, 8)
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
         insert_action = QtWidgets.QAction("Insert channel below...", self)
@@ -105,19 +105,19 @@ class _ChannelWidget(QtWidgets.QWidget):
 
     def insert_channel(self):
         next_ind = self.parent.plot_widgets.index(self) + 1
-        self.parent.insertPlotDialog(next_ind)
+        self.parent.insert_plot_dialog(next_ind)
 
     def move_channel_up(self):
         ind = self.parent.plot_widgets.index(self)
-        self.parent.moveUp(ind)
+        self.parent.move_up(ind)
 
     def move_channel_down(self):
         ind = self.parent.plot_widgets.index(self)
-        self.parent.moveDown(ind)
+        self.parent.move_down(ind)
 
     def remove_channel(self):
         ind = self.parent.plot_widgets.index(self)
-        self.parent.removePlot(ind)
+        self.parent.remove_plot(ind)
 
 
 class _WaveformWidget(QtWidgets.QWidget):
@@ -130,7 +130,7 @@ class _WaveformWidget(QtWidgets.QWidget):
 
         # Add channel
         add_channel_action = QtWidgets.QAction("Add channel...", self)
-        add_channel_action.triggered.connect(self.addPlotDialog)
+        add_channel_action.triggered.connect(self.add_plot_dialog)
         add_channel_action.setShortcut("CTRL+N")
         add_channel_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(add_channel_action)
@@ -162,7 +162,7 @@ class _WaveformWidget(QtWidgets.QWidget):
         main_layout.addWidget(scroll_area)
         self.setLayout(main_layout)
         self.cmgr.traceDataChanged.connect(self.refresh_display)
-        self._plots = list()
+        self.cmgr.addActiveChannelSignal.connect(self.add_plot)
         self.plot_widgets = list()
 
     async def _get_channel_from_dialog(self):
@@ -174,19 +174,19 @@ class _WaveformWidget(QtWidgets.QWidget):
         dialog.open()
         return await fut
 
-    def _add_plot(self, channel):
+    def add_plot(self, channel):
         channel_widget = _ChannelWidget(channel, parent=self)
         if channel in self.cmgr.data:
             channel_widget.load_data(self.cmgr.data[channel])
         self.plot_layout.addWidget(channel_widget)
         self.plot_widgets.append(channel_widget)
 
-    async def _add_plot_task(self):
+    async def _add_plot_dialog_task(self):
         channel = await self._get_channel_from_dialog()
-        self._add_plot(channel)
+        self.add_plot(channel)
 
-    def addPlotDialog(self):
-        asyncio.ensure_future(self._add_plot_task())
+    def add_plot_dialog(self):
+        asyncio.ensure_future(self._add_plot_dialog_task())
 
     def _insert_plot(self, channel, index):
         channel_widget = _ChannelWidget(channel, parent=self)
@@ -195,32 +195,32 @@ class _WaveformWidget(QtWidgets.QWidget):
         self.plot_layout.insertWidget(index, channel_widget)
         self.plot_widgets.insert(index, channel_widget)
 
-    async def _insert_plot_task(self, index):
+    async def _insert_plot_dialog_task(self, index):
         channel = await self._get_channel_from_dialog()
         self._insert_plot(channel, index)
 
-    def insertPlotDialog(self, index):
-        asyncio.ensure_future(self._insert_plot_task(index))
+    def insert_plot_dialog(self, index):
+        asyncio.ensure_future(self._insert_plot_dialog_task(index))
 
-    def removePlot(self, index):
+    def remove_plot(self, index):
         widget = self.plot_layout.takeAt(index)
         self.plot_widgets.pop(index)
         widget.widget().deleteLater()
 
-    def moveDown(self, index):
+    def move_down(self, index):
         self.plot_layout.takeAt(index)
         widget = self.plot_widgets.pop(index)
         self.plot_layout.insertWidget(index+1, widget)
         self.plot_widgets.insert(index+1, widget)
     
-    def moveUp(self, index):
+    def move_up(self, index):
         self.plot_layout.takeAt(index)
         widget = self.plot_widgets.pop(index)
         self.plot_layout.insertWidget(index-1, widget)
         self.plot_widgets.insert(index-1, widget)
 
     def refresh_display(self):
-        start = time.monotonic()
+        start = time.monotonic() # TODO remove time logging
         for widget in self.plot_widgets:
             channel = widget.channel
             data = self.cmgr.data[channel]
@@ -237,10 +237,10 @@ class _WaveformWidget(QtWidgets.QWidget):
     def _read_save_list(self, save_list):
         save_list = pyon.decode(save_list)
         for i in reversed(range(len(self.plot_widgets))):
-            self.removePlot(i)
+            self.remove_plot(i)
 
         for channel in save_list:
-            self._add_plot(channel)
+            self.add_plot(channel)
 
     #set defaults
     async def _save_list_task(self):
@@ -281,8 +281,6 @@ class _WaveformWidget(QtWidgets.QWidget):
 class _ChannelManager(QtCore.QObject):
     traceDataChanged = QtCore.pyqtSignal()
     addActiveChannelSignal = QtCore.pyqtSignal(str)
-    removeActiveChannelSignal = QtCore.pyqtSignal(int)
-    insertActiveChannelSignal = QtCore.pyqtSignal(str, int)
 
     def __init__(self):
         QtCore.QObject.__init__(self) 
@@ -306,7 +304,6 @@ class _TraceManager:
         self.proxy_reconnect = asyncio.Event()
         self.dump_updated = asyncio.Event()
         self.reconnect_task = None
-        self.channel_parsers = dict()
 
     def _update_from_dump(self, dump):
         self.dump = dump
@@ -421,12 +418,12 @@ class _TraceManager:
             self.proxy_reconnect.set()
     
     # Experiment and applet handling
+    # TODO update
     async def ccb_pull_trace(self, channels=None):
         try:
             await self.proxy_client.pull_from_device()
             await self.dump_updated.wait()
             self.dump_updated.clear()
-            self.cmgr.active_channels.clear()
             for name in channels:
                 self.cmgr.addActiveChannelSignal.emit(name)
         except:
