@@ -52,7 +52,6 @@ class _AddChannelDialog(QtWidgets.QDialog):
         confirm_button.clicked.connect(self.add_channel)
         grid.addWidget(confirm_button, 1, 1)
 
-
     def add_channel(self):
         channel = self.waveform_channel_list.currentItem()
         if channel is not None:
@@ -147,7 +146,7 @@ class _WaveformWidget(QtWidgets.QWidget):
         self.cmgr.addActiveChannelSignal.connect(self.add_plot)
         self.plot_widgets = list()
 
-    async def _get_channel_from_dialog(self):
+    async def get_channel_from_dialog(self):
         dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
         fut = asyncio.Future()
         def on_accept(s):
@@ -163,26 +162,26 @@ class _WaveformWidget(QtWidgets.QWidget):
         self.plot_layout.addWidget(channel_widget)
         self.plot_widgets.append(channel_widget)
 
-    async def _add_plot_dialog_task(self):
-        channel = await self._get_channel_from_dialog()
+    async def add_plot_dialog_task(self):
+        channel = await self.get_channel_from_dialog()
         self.add_plot(channel)
 
     def add_plot_dialog(self):
-        asyncio.ensure_future(self._add_plot_dialog_task())
+        asyncio.ensure_future(self.add_plot_dialog_task())
 
-    def _insert_plot(self, channel, index):
+    def insert_plot(self, channel, index):
         channel_widget = _ChannelWidget(channel, parent=self)
         if channel in self.cmgr.data:
             channel_widget.load_data(self.cmgr.data[channel])
         self.plot_layout.insertWidget(index, channel_widget)
         self.plot_widgets.insert(index, channel_widget)
 
-    async def _insert_plot_dialog_task(self, index):
-        channel = await self._get_channel_from_dialog()
-        self._insert_plot(channel, index)
+    async def insert_plot_dialog_task(self, index):
+        channel = await self.get_channel_from_dialog()
+        self.insert_plot(channel, index)
 
     def insert_plot_dialog(self, index):
-        asyncio.ensure_future(self._insert_plot_dialog_task(index))
+        asyncio.ensure_future(self.insert_plot_dialog_task(index))
 
     def remove_plot(self, index):
         widget = self.plot_layout.takeAt(index)
@@ -210,13 +209,13 @@ class _WaveformWidget(QtWidgets.QWidget):
         end = time.monotonic()
         logger.info(f"Refresh took {(end - start)*1000} ms")
 
-    def _prepare_save_list(self):
+    def prepare_save_list(self):
         save_list = list()
         for widget in self.plot_widgets:
             save_list.append(widget.channel)
         return pyon.encode(save_list)
 
-    def _read_save_list(self, save_list):
+    def read_save_list(self, save_list):
         save_list = pyon.decode(save_list)
         for i in reversed(range(len(self.plot_widgets))):
             self.remove_plot(i)
@@ -225,7 +224,7 @@ class _WaveformWidget(QtWidgets.QWidget):
             self.add_plot(channel)
 
     #set defaults
-    async def _save_list_task(self):
+    async def save_list_task(self):
         try:
             filename = await get_save_file_name(
                     self,
@@ -236,14 +235,14 @@ class _WaveformWidget(QtWidgets.QWidget):
         except asyncio.CancelledError:
             return
         try:
-            save_list = self._prepare_save_list()
+            save_list = self.prepare_save_list()
             with open(filename, 'w') as f:
                 f.write(save_list)
         except:
             logger.error("Failed to save channel list",
                          exc_info=True)
 
-    async def _open_list_task(self):
+    async def open_list_task(self):
         try:
             filename = await get_open_file_name(
                     self,
@@ -254,12 +253,13 @@ class _WaveformWidget(QtWidgets.QWidget):
             return
         try:
             with open(filename, 'r') as f:
-                self._read_save_list(f.read())
+                self.read_save_list(f.read())
         except:
             logger.error("Failed to read channel list.",
                          exc_info=True)
 
 
+# See if can be refactored out
 class _ChannelManager(QtCore.QObject):
     traceDataChanged = QtCore.pyqtSignal()
     addActiveChannelSignal = QtCore.pyqtSignal(str)
@@ -287,14 +287,14 @@ class _TraceManager:
         self.dump_updated = asyncio.Event()
         self.reconnect_task = None
 
-    def _update_from_dump(self, dump):
+    def update_from_dump(self, dump):
         self.dump = dump
         self.decoded_dump = decode_dump(dump)
         decoded_dump_to_waveform(self.cmgr, self.ddb, self.decoded_dump)
         self.cmgr.traceDataChanged.emit()
         self.dump_updated.set()
 
-    async def _open_trace_task(self):
+    async def open_trace_task(self):
         try:
             filename = await get_open_file_name(
                     self.parent,
@@ -306,12 +306,12 @@ class _TraceManager:
         try:
             with open(filename, 'rb') as f:
                 dump = f.read()
-            self._update_from_dump(dump)
+            self.update_from_dump(dump)
         except:
             logger.error("Failed to parse binary trace file",
                          exc_info=True)
 
-    async def _save_trace_task(self):
+    async def save_trace_task(self):
         try:
             filename = await get_save_file_name(
                     self.parent,
@@ -327,13 +327,13 @@ class _TraceManager:
             logger.error("Failed to save binary trace file",
                          exc_info=True)
             
-    async def _pull_from_device_task(self):
+    async def pull_from_device_task(self):
         try:
             asyncio.ensure_future(exc_to_warning(self.proxy_client.pull_from_device()))
         except:
             logger.error("Pull from device failed, is proxy running?", exc_info=1)
 
-    async def _save_vcd_task(self):
+    async def save_vcd_task(self):
         try:
             filename = await get_save_file_name(
                     self.parent,
@@ -355,7 +355,7 @@ class _TraceManager:
     def update_dump(self, mod):
         dump = mod.get("value", None)
         if dump:
-            self._update_from_dump(dump)
+            self.update_from_dump(dump)
    
     # Proxy client connections
     async def start(self, server, port):
@@ -462,7 +462,7 @@ class WaveformDock(QtWidgets.QDockWidget):
                     QtWidgets.QStyle.SP_BrowserReload))
         grid.addWidget(self.pull_button, 0, 1)
         self.pull_button.clicked.connect(
-                lambda: asyncio.ensure_future(self.tm._pull_from_device_task()))
+                lambda: asyncio.ensure_future(self.tm.pull_from_device_task()))
 
         self.waveform_widget = _WaveformWidget(channel_mgr=self.cmgr) 
         grid.addWidget(self.waveform_widget, 2, 0, colspan=12)
@@ -476,30 +476,30 @@ class WaveformDock(QtWidgets.QDockWidget):
 
         open_trace_action = QtWidgets.QAction("Open trace...", self)
         open_trace_action.triggered.connect(
-                lambda: asyncio.ensure_future(self.tm._open_trace_task()))
+                lambda: asyncio.ensure_future(self.tm.open_trace_task()))
         file_menu.addAction(open_trace_action)
 
         save_trace_action = QtWidgets.QAction("Save trace...", self)
         save_trace_action.triggered.connect(
-                lambda: asyncio.ensure_future(self.tm._save_trace_task()))
+                lambda: asyncio.ensure_future(self.tm.save_trace_task()))
         file_menu.addAction(save_trace_action)
 
         # Load active list
         open_list_action = QtWidgets.QAction("Open channel list...", self)
         open_list_action.triggered.connect(
-                lambda: asyncio.ensure_future(self.waveform_widget._open_list_task()))
+                lambda: asyncio.ensure_future(self.waveform_widget.open_list_task()))
         file_menu.addAction(open_list_action)
 
         # Save active list
         save_list_action = QtWidgets.QAction("Save channel list...", self)
         save_list_action.triggered.connect(
-                lambda: asyncio.ensure_future(self.waveform_widget._save_list_task()))
+                lambda: asyncio.ensure_future(self.waveform_widget.save_list_task()))
         file_menu.addAction(save_list_action)
 
         # Save VCD
         save_vcd_action = QtWidgets.QAction("Save VCD...", self)
         save_vcd_action.triggered.connect(
-                lambda: asyncio.ensure_future(self.tm._save_vcd_task()))
+                lambda: asyncio.ensure_future(self.tm.save_vcd_task()))
         file_menu.addAction(save_vcd_action)
 
         self.menu_button.setMenu(file_menu)
