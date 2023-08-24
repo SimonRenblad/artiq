@@ -99,12 +99,27 @@ class _ChannelWidget(QtWidgets.QWidget):
         remove_channel_action.triggered.connect(self.remove_channel)
         self.label.addAction(remove_channel_action)
 
+    def _extract_logs(self, data):
+        out_data = []
+        for m in data:
+            log = ""
+            while m > 0:
+                log += chr(m & 0xff)
+                m >>= 8
+            out_data.append(log[::-1])
+        return out_data
+
     def load_data(self, data):
         try:
             y_data, x_data = zip(*data)
-            self.waveform.getPlotItem().listDataItems()[0].setData(x=x_data, y=y_data)
+            if self.channel[:3] == "log":
+                y_data = self._extract_logs(y_data)
+                for msg, t in zip(y_data, x_data):
+                    logger.info("LOG {}: {} at time {}".format(self.channel, msg, t))
+            else:
+                self.waveform.getPlotItem().listDataItems()[0].setData(x=x_data, y=y_data)
         except:
-            logger.warn("Unable to load data for {}".format(self.channel))
+            logger.warn("Unable to load data for {}".format(self.channel), exc_info=1)
             self.waveform.getPlotItem().listDataItems()[0].setData(x=np.zeros(1), y=np.zeros(1))
 
     def insert_channel(self):
@@ -135,7 +150,7 @@ class _WaveformWidget(QtWidgets.QWidget):
         self.trace = trace
 
         self.plot_layout = QtWidgets.QVBoxLayout()
-        self.plot_layout.setSpacing(1) #TODO consider needing
+        self.plot_layout.setSpacing(1) 
         scroll_area = QtWidgets.QScrollArea()
         scroll_area.setWidgetResizable(True)
         widget = QtWidgets.QWidget()
