@@ -184,14 +184,14 @@ class VCDManager:
 
 
 class WaveformChannel:
-    def __init__(self, name, cmgr):
+    def __init__(self, name, trace):
         self.current_time = 0
-        self.cmgr = cmgr
-        self.cmgr["data"][name] = list()
+        self.trace = trace
+        self.trace["data"][name] = list()
         self.name = name
 
     def set_value(self, value):
-        self.cmgr["data"][self.name].append((value, self.current_time))
+        self.trace["data"][self.name].append((value, self.current_time))
 
     def set_value_double(self, x):
         self.set_value(x)
@@ -201,19 +201,19 @@ class WaveformChannel:
 
 
 class WaveformManager:
-    def __init__(self, cmgr):
+    def __init__(self, trace):
         self.current_time = 0
         self.timescale = None
         self.channels = dict()
-        self.cmgr = cmgr
+        self.trace = trace
     
     def set_timescale_ps(self, timescale):
         self.timescale = timescale * 1e-9
 
     def get_channel(self, name, width):
-        channel = WaveformChannel(name, self.cmgr)
+        channel = WaveformChannel(name, self.trace)
         self.channels[name] = channel
-        self.cmgr["channels"].add(name)
+        self.trace["channels"].add(name)
         return channel
     
     @contextmanager
@@ -554,8 +554,8 @@ def decoded_dump_to_vcd(fileobj, devices, dump, uniform_interval=False):
     vcd_manager = VCDManager(fileobj)
     _dump_to_target(vcd_manager, devices, dump, uniform_interval)
 
-def decoded_dump_to_waveform(channel_mgr, devices, dump, uniform_interval=False):
-    manager = WaveformManager(channel_mgr)
+def decoded_dump_to_waveform(trace, devices, dump, uniform_interval=False):
+    manager = WaveformManager(trace)
     _dump_to_target(manager, devices, dump, uniform_interval)
 
 def _dump_to_target(manager, devices, dump, uniform_interval):
