@@ -191,6 +191,10 @@ class _WaveformWidget(QtWidgets.QWidget):
         self.plot_widgets.pop(index)
         widget.widget().deleteLater()
 
+    def clear_plots(self):
+        for i in reversed(range(len(self.plot_widgets))):
+            self.remove_plot(i)
+
     def move_down(self, index):
         self.plot_layout.takeAt(index)
         widget = self.plot_widgets.pop(index)
@@ -411,6 +415,7 @@ class _TraceManager:
             await self.proxy_client.pull_from_device()
             await self.dump_updated.wait()
             self.dump_updated.clear()
+            self.parent.clearActiveChannelsSignal.emit()
             for name in channels:
                 self.parent.addActiveChannelSignal.emit(name)
         except:
@@ -430,6 +435,7 @@ class _TraceManager:
 class WaveformDock(QtWidgets.QDockWidget):
     traceDataChanged = QtCore.pyqtSignal()
     addActiveChannelSignal = QtCore.pyqtSignal(str)
+    clearActiveChannelsSignal = QtCore.pyqtSignal()
 
     def __init__(self, loop=None):
         QtWidgets.QDockWidget.__init__(self, "Waveform")
@@ -461,6 +467,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.waveform_widget = _WaveformWidget(self, self.trace) 
         self.traceDataChanged.connect(self.waveform_widget.refresh_display)
         self.addActiveChannelSignal.connect(self.waveform_widget.add_plot)
+        self.clearActiveChannelsSignal.connect(self.waveform_widget.clear_plots)
         grid.addWidget(self.waveform_widget, 2, 0, colspan=12)
         
         file_menu = QtWidgets.QMenu()
