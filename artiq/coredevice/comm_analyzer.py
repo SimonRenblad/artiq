@@ -465,9 +465,9 @@ class LogHandler:
             self.current_entry += _extract_log_chars(message.data)
             if len(self.current_entry) > 1 and self.current_entry[-1] == "\x1D":
                 channel_name, log_message = self.current_entry[:-1].split("\x1E", maxsplit=1)
-                vcd_value = ""
+                vcd_value = 0
                 for c in log_message:
-                    vcd_value += "{:08b}".format(ord(c))
+                    vcd_value = (vcd_value << 8) + ord(c)
                 self.vcd_channels[channel_name].set_value(vcd_value)
                 self.current_entry = ""
 
