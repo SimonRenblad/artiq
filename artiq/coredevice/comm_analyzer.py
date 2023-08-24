@@ -184,14 +184,14 @@ class VCDManager:
 
 
 class WaveformChannel:
-    def __init__(self, name, cmgr=None):
+    def __init__(self, name, cmgr):
         self.current_time = 0
         self.cmgr = cmgr
-        self.cmgr.data[name] = list()
+        self.cmgr["data"][name] = list()
         self.name = name
 
     def set_value(self, value):
-        self.cmgr.data[self.name].append((value, self.current_time))
+        self.cmgr["data"][self.name].append((value, self.current_time))
 
     def set_value_double(self, x):
         self.set_value(x)
@@ -201,7 +201,7 @@ class WaveformChannel:
 
 
 class WaveformManager:
-    def __init__(self, cmgr=None):
+    def __init__(self, cmgr):
         self.current_time = 0
         self.timescale = None
         self.channels = dict()
@@ -213,7 +213,7 @@ class WaveformManager:
     def get_channel(self, name, width):
         channel = WaveformChannel(name, self.cmgr)
         self.channels[name] = channel
-        self.cmgr.channels.add(name) #TODO make smarter, ignore if exist etc, make orderedset or smth
+        self.cmgr["channels"].add(name)
         return channel
     
     @contextmanager
