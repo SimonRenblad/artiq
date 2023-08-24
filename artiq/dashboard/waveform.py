@@ -20,11 +20,10 @@ logger = logging.getLogger(__name__)
 class _AddChannelDialog(QtWidgets.QDialog):
     accepted = QtCore.pyqtSignal(str)
 
-    def __init__(self, parent, channel_mgr=None):
+    def __init__(self, parent, channels):
         QtWidgets.QDialog.__init__(self, parent=parent)
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
         self.setWindowTitle("Add channel")   
-        self.cmgr = channel_mgr
         self.parent = parent
 
         grid = QtWidgets.QGridLayout()
@@ -35,7 +34,7 @@ class _AddChannelDialog(QtWidgets.QDialog):
         self.waveform_channel_list = QtWidgets.QListWidget()
         grid.addWidget(self.waveform_channel_list, 0, 0, 1, 2)
         self.waveform_channel_list.itemDoubleClicked.connect(self.add_channel)
-        for channel in sorted(self.cmgr.channels):
+        for channel in sorted(channels):
             self.waveform_channel_list.addItem(channel)
 
         enter_action = QtWidgets.QAction("Add channel", self)
@@ -114,11 +113,14 @@ class _ChannelWidget(QtWidgets.QWidget):
 
     def move_channel_up(self):
         ind = self.parent.plot_widgets.index(self)
-        self.parent.move_up(ind)
+        if ind != 0:
+            self.parent.move_up(ind)
 
     def move_channel_down(self):
         ind = self.parent.plot_widgets.index(self)
-        self.parent.move_down(ind)
+        l = len(self.parent.plot_widgets)
+        if ind != l - 1:
+            self.parent.move_down(ind)
 
     def remove_channel(self):
         ind = self.parent.plot_widgets.index(self)
@@ -133,7 +135,7 @@ class _WaveformWidget(QtWidgets.QWidget):
         self.cmgr = channel_mgr
 
         self.plot_layout = QtWidgets.QVBoxLayout()
-        self.plot_layout.setSpacing(1)
+        self.plot_layout.setSpacing(1) #TODO consider needing
         scroll_area = QtWidgets.QScrollArea()
         scroll_area.setWidgetResizable(True)
         widget = QtWidgets.QWidget()
@@ -142,12 +144,11 @@ class _WaveformWidget(QtWidgets.QWidget):
         main_layout = QtWidgets.QVBoxLayout()
         main_layout.addWidget(scroll_area)
         self.setLayout(main_layout)
-        self.cmgr.traceDataChanged.connect(self.refresh_display)
-        self.cmgr.addActiveChannelSignal.connect(self.add_plot)
         self.plot_widgets = list()
 
     async def get_channel_from_dialog(self):
-        dialog = _AddChannelDialog(self, channel_mgr=self.cmgr)
+        channels = self.cmgr["channels"]
+        dialog = _AddChannelDialog(self, channels)
         fut = asyncio.Future()
         def on_accept(s):
             fut.set_result(s)
@@ -156,9 +157,10 @@ class _WaveformWidget(QtWidgets.QWidget):
         return await fut
 
     def add_plot(self, channel):
+        data = self.cmgr["data"]
         channel_widget = _ChannelWidget(channel, parent=self)
-        if channel in self.cmgr.data:
-            channel_widget.load_data(self.cmgr.data[channel])
+        if channel in data:
+            channel_widget.load_data(data[channel])
         self.plot_layout.addWidget(channel_widget)
         self.plot_widgets.append(channel_widget)
 
@@ -170,9 +172,10 @@ class _WaveformWidget(QtWidgets.QWidget):
         asyncio.ensure_future(self.add_plot_dialog_task())
 
     def insert_plot(self, channel, index):
+        data = self.cmgr["data"]
         channel_widget = _ChannelWidget(channel, parent=self)
-        if channel in self.cmgr.data:
-            channel_widget.load_data(self.cmgr.data[channel])
+        if channel in data:
+            channel_widget.load_data(data[channel])
         self.plot_layout.insertWidget(index, channel_widget)
         self.plot_widgets.insert(index, channel_widget)
 
@@ -201,11 +204,11 @@ class _WaveformWidget(QtWidgets.QWidget):
         self.plot_widgets.insert(index-1, widget)
 
     def refresh_display(self):
+        data = self.cmgr["data"]
         start = time.monotonic() # TODO remove time logging
         for widget in self.plot_widgets:
             channel = widget.channel
-            data = self.cmgr.data[channel]
-            widget.load_data(data)
+            widget.load_data(data[channel])
         end = time.monotonic()
         logger.info(f"Refresh took {(end - start)*1000} ms")
 
@@ -258,18 +261,6 @@ class _WaveformWidget(QtWidgets.QWidget):
             logger.error("Failed to read channel list.",
                          exc_info=True)
 
-
-# See if can be refactored out
-class _ChannelManager(QtCore.QObject):
-    traceDataChanged = QtCore.pyqtSignal()
-    addActiveChannelSignal = QtCore.pyqtSignal(str)
-
-    def __init__(self):
-        QtCore.QObject.__init__(self) 
-        self.data = dict()
-        self.channels = set()
-
-
 class _TraceManager:
     def __init__(self, parent, channel_mgr, loop):
         self.parent = parent
@@ -291,7 +282,7 @@ class _TraceManager:
         self.dump = dump
         self.decoded_dump = decode_dump(dump)
         decoded_dump_to_waveform(self.cmgr, self.ddb, self.decoded_dump)
-        self.cmgr.traceDataChanged.emit()
+        self.parent.traceDataChanged.emit()
         self.dump_updated.set()
 
     async def open_trace_task(self):
@@ -421,7 +412,7 @@ class _TraceManager:
             await self.dump_updated.wait()
             self.dump_updated.clear()
             for name in channels:
-                self.cmgr.addActiveChannelSignal.emit(name)
+                self.parent.addActiveChannelSignal.emit(name)
         except:
             logger.error("Error pulling from proxy, is proxy connected?", exc_info=1)
 
@@ -437,13 +428,16 @@ class _TraceManager:
 
 
 class WaveformDock(QtWidgets.QDockWidget):
+    traceDataChanged = QtCore.pyqtSignal()
+    addActiveChannelSignal = QtCore.pyqtSignal(str)
+
     def __init__(self, loop=None):
         QtWidgets.QDockWidget.__init__(self, "Waveform")
         self.setObjectName("Waveform")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
                          QtWidgets.QDockWidget.DockWidgetFloatable)
 
-        self.cmgr = _ChannelManager()
+        self.cmgr = {"channels": set(), "data": dict()}
         self.tm = _TraceManager(parent=self, channel_mgr=self.cmgr, loop=loop)
 
         grid = LayoutWidget()
@@ -465,6 +459,8 @@ class WaveformDock(QtWidgets.QDockWidget):
                 lambda: asyncio.ensure_future(self.tm.pull_from_device_task()))
 
         self.waveform_widget = _WaveformWidget(channel_mgr=self.cmgr) 
+        self.traceDataChanged.connect(self.waveform_widget.refresh_display)
+        self.addActiveChannelSignal.connect(self.waveform_widget.add_plot)
         grid.addWidget(self.waveform_widget, 2, 0, colspan=12)
         
         file_menu = QtWidgets.QMenu()
