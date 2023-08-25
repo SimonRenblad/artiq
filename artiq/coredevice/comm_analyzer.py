@@ -165,7 +165,7 @@ class VCDManager:
     def set_timescale_ps(self, timescale):
         self.out.write("$timescale {}ps $end\n".format(round(timescale)))
 
-    def get_channel(self, name, width):
+    def get_channel(self, name, width, is_log=False):
         code = next(self.codes)
         self.out.write("$var wire {width} {code} {name} $end\n"
                        .format(name=name, code=code, width=width))
@@ -210,10 +210,13 @@ class WaveformManager:
     def set_timescale_ps(self, timescale):
         self.timescale = timescale * 1e-9
 
-    def get_channel(self, name, width):
+    def get_channel(self, name, width, is_log=False):
         channel = WaveformChannel(name, self.trace)
         self.channels[name] = channel
-        self.trace["channels"].add(name)
+        if is_log:
+            self.trace["logs"].add(name)
+        else:
+            self.trace["channels"].add(name)
         return channel
     
     @contextmanager
@@ -457,7 +460,8 @@ class LogHandler:
         self.vcd_channels = dict()
         for name, maxlength in vcd_log_channels.items():
             self.vcd_channels[name] = vcd_manager.get_channel("log/" + name,
-                                                              maxlength*8)
+                                                              maxlength*8,
+                                                              is_log=True)
         self.current_entry = ""
 
     def process_message(self, message):
