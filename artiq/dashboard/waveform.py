@@ -18,7 +18,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 class _AddChannelDialog(QtWidgets.QDialog):
-    accepted = QtCore.pyqtSignal(str)
+    accepted = QtCore.pyqtSignal(list)
 
     def __init__(self, parent, channels):
         QtWidgets.QDialog.__init__(self, parent=parent)
@@ -32,8 +32,9 @@ class _AddChannelDialog(QtWidgets.QDialog):
         self.setLayout(grid)
 
         self.waveform_channel_list = QtWidgets.QListWidget()
+        self.waveform_channel_list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         grid.addWidget(self.waveform_channel_list, 0, 0, 1, 2)
-        self.waveform_channel_list.itemDoubleClicked.connect(self.add_channel)
+        self.waveform_channel_list.itemDoubleClicked.connect(self.add_channels)
         for channel in sorted(channels):
             self.waveform_channel_list.addItem(channel)
 
@@ -41,20 +42,20 @@ class _AddChannelDialog(QtWidgets.QDialog):
         enter_action.setShortcut("RETURN")
         enter_action.setShortcutContext(Qt.WidgetShortcut)
         self.addAction(enter_action)
-        enter_action.triggered.connect(self.add_channel)
+        enter_action.triggered.connect(self.add_channels)
 
         cancel_button = QtWidgets.QPushButton("Cancel")
         cancel_button.clicked.connect(self.close)
         grid.addWidget(cancel_button, 1, 0)
 
         confirm_button = QtWidgets.QPushButton("Confirm")
-        confirm_button.clicked.connect(self.add_channel)
+        confirm_button.clicked.connect(self.add_channels)
         grid.addWidget(confirm_button, 1, 1)
 
-    def add_channel(self):
-        channel = self.waveform_channel_list.currentItem()
-        if channel is not None:
-            self.accepted.emit(channel.text())
+    def add_channels(self):
+        channels = self.waveform_channel_list.selectedItems()
+        channels = [c.text() for c in channels]
+        self.accepted.emit(channels)
         self.close()
 
 
@@ -102,6 +103,7 @@ class _ChannelWidget(QtWidgets.QWidget):
 
     def load_data(self, data):
         try:
+            y_data, x_data = zip(*data)
             self.waveform.getPlotItem().listDataItems()[0].setData(x=x_data, y=y_data)
         except:
             logger.warn("Unable to load data for {}".format(self.channel), exc_info=1)
@@ -146,7 +148,7 @@ class _WaveformWidget(QtWidgets.QWidget):
         self.setLayout(main_layout)
         self.plot_widgets = list()
 
-    async def get_channel_from_dialog(self):
+    async def get_channels_from_dialog(self):
         channels = self.trace["channels"]
         dialog = _AddChannelDialog(self, channels)
         fut = asyncio.Future()
@@ -164,12 +166,13 @@ class _WaveformWidget(QtWidgets.QWidget):
         self.plot_layout.addWidget(channel_widget)
         self.plot_widgets.append(channel_widget)
 
-    async def add_plot_dialog_task(self):
-        channel = await self.get_channel_from_dialog()
-        self.add_plot(channel)
+    async def add_plots_dialog_task(self):
+        channels = await self.get_channels_from_dialog()
+        for channel in channels:
+            self.add_plot(channel)
 
-    def add_plot_dialog(self):
-        asyncio.ensure_future(self.add_plot_dialog_task())
+    def add_plots_dialog(self):
+        asyncio.ensure_future(self.add_plots_dialog_task())
 
     def insert_plot(self, channel, index):
         data = self.trace["data"]
@@ -476,7 +479,7 @@ class WaveformDock(QtWidgets.QDockWidget):
 
         # Add channel
         add_channel_action = QtWidgets.QAction("Add channel...", self)
-        add_channel_action.triggered.connect(self.waveform_widget.add_plot_dialog)
+        add_channel_action.triggered.connect(self.waveform_widget.add_plots_dialog)
         file_menu.addAction(add_channel_action)
 
         open_trace_action = QtWidgets.QAction("Open trace...", self)
