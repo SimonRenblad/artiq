@@ -65,6 +65,7 @@ class _ChannelWidget(QtWidgets.QWidget):
         self.channel = channel
         self.parent = parent
         self.setMinimumHeight(300)
+
         frame_layout = QtWidgets.QVBoxLayout()
         frame = QtWidgets.QFrame()
         frame.setFrameShape(QtWidgets.QFrame.Box)
@@ -83,8 +84,8 @@ class _ChannelWidget(QtWidgets.QWidget):
         pi.showGrid(x=True, y=True)
         pi.getAxis("left").setStyle(tickTextWidth=100, autoExpandTextSpace=False)
         self.waveform = pg.PlotWidget(plotItem=pi)
-
         layout.addWidget(self.waveform, 8)
+
         self.label.setContextMenuPolicy(Qt.ActionsContextMenu)
         insert_action = QtWidgets.QAction("Insert channel below...", self)
         insert_action.triggered.connect(self.insert_channel)
@@ -99,25 +100,9 @@ class _ChannelWidget(QtWidgets.QWidget):
         remove_channel_action.triggered.connect(self.remove_channel)
         self.label.addAction(remove_channel_action)
 
-    def _extract_logs(self, data):
-        out_data = []
-        for m in data:
-            log = ""
-            while m > 0:
-                log += chr(m & 0xff)
-                m >>= 8
-            out_data.append(log[::-1])
-        return out_data
-
     def load_data(self, data):
         try:
-            y_data, x_data = zip(*data)
-            if self.channel[:3] == "log":
-                y_data = self._extract_logs(y_data)
-                for msg, t in zip(y_data, x_data):
-                    logger.info("LOG {}: {} at time {}".format(self.channel, msg, t))
-            else:
-                self.waveform.getPlotItem().listDataItems()[0].setData(x=x_data, y=y_data)
+            self.waveform.getPlotItem().listDataItems()[0].setData(x=x_data, y=y_data)
         except:
             logger.warn("Unable to load data for {}".format(self.channel), exc_info=1)
             self.waveform.getPlotItem().listDataItems()[0].setData(x=np.zeros(1), y=np.zeros(1))
@@ -458,7 +443,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
                          QtWidgets.QDockWidget.DockWidgetFloatable)
 
-        self.trace = {"channels": set(), "data": dict()}
+        self.trace = {"channels": set(), "logs": set(), "data": dict()}
         self.tm = _TraceManager(self, self.trace, loop)
 
         grid = LayoutWidget()
@@ -485,6 +470,8 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.clearActiveChannelsSignal.connect(self.waveform_widget.clear_plots)
         grid.addWidget(self.waveform_widget, 2, 0, colspan=12)
         
+        self.traceDataChanged.connect(self.write_logs) 
+
         file_menu = QtWidgets.QMenu()
 
         # Add channel
@@ -521,3 +508,22 @@ class WaveformDock(QtWidgets.QDockWidget):
         file_menu.addAction(save_vcd_action)
 
         self.menu_button.setMenu(file_menu)
+
+    @staticmethod
+    def extract_logs(data):
+        out_data = []
+        for m in data:
+            log = ""
+            while m > 0:
+                log += chr(m & 0xff)
+                m >>= 8
+            out_data.append(log[::-1])
+        return out_data
+
+    def write_logs(self):
+        for log in sorted(self.trace["logs"]):
+            data = self.trace["data"][log]
+            msgs, times = zip(*data)
+            msgs = self.extract_logs(msgs)
+            for msg, time in zip(msgs, times):
+                logger.info("{}@{}: {}".format(log, time, msg))
