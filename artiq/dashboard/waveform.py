@@ -106,7 +106,7 @@ class _ChannelWidget(QtWidgets.QWidget):
             y_data, x_data = zip(*data)
             self.waveform.getPlotItem().listDataItems()[0].setData(x=x_data, y=y_data)
         except:
-            logger.warn("Unable to load data for {}".format(self.channel), exc_info=1)
+            logger.warn("Unable to load data for {}".format(self.channel))
             self.waveform.getPlotItem().listDataItems()[0].setData(x=np.zeros(1), y=np.zeros(1))
 
     def insert_channel(self):
@@ -183,8 +183,9 @@ class _WaveformWidget(QtWidgets.QWidget):
         self.plot_widgets.insert(index, channel_widget)
 
     async def insert_plot_dialog_task(self, index):
-        channel = await self.get_channel_from_dialog()
-        self.insert_plot(channel, index)
+        channels = await self.get_channels_from_dialog()
+        for channel in channels:
+            self.insert_plot(channel, index)
 
     def insert_plot_dialog(self, index):
         asyncio.ensure_future(self.insert_plot_dialog_task(index))
