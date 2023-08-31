@@ -6,6 +6,7 @@ from enum import Enum
 import struct
 import logging
 import socket
+import numpy as np
 
 
 logger = logging.getLogger(__name__)
@@ -160,7 +161,7 @@ class VCDManager:
     def set_timescale_ps(self, timescale):
         self.out.write("$timescale {}ps $end\n".format(round(timescale)))
 
-    def get_channel(self, name, width):
+    def get_channel(self, name, width, is_log=False):
         code = next(self.codes)
         self.out.write("$var wire {width} {code} {name} $end\n"
                        .format(name=name, code=code, width=width))
@@ -178,10 +179,60 @@ class VCDManager:
             self.current_time = time
 
 
-class TTLHandler:
-    def __init__(self, vcd_manager, name):
+class WaveformChannel:
+    def __init__(self, name, trace, current_time):
         self.name = name
-        self.channel_value = vcd_manager.get_channel("ttl/" + name, 1)
+        self.trace = trace
+        self.current_time = current_time
+        self.trace["data"][name] = list()
+
+    def set_value(self, value):
+        if value == "X":
+            value = np.nan
+        else:
+            value = int(value, 2)
+        self.trace["data"][self.name].append((value, self.current_time))
+
+    def set_value_double(self, x):
+        self.trace["data"][self.name].append((x, self.current_time))
+
+    def set_time(self, time):
+        self.current_time = time
+
+
+class WaveformManager:
+    def __init__(self, trace):
+        self.current_time = 0
+        self.timescale = None
+        self.channels = dict()
+        self.trace = trace
+
+    def set_timescale_ps(self, timescale):
+        self.timescale = timescale * 1e-9
+
+    def get_channel(self, name, width, is_log=False):
+        channel = WaveformChannel(name, self.trace, self.current_time)
+        self.channels[name] = channel
+        if is_log:
+            self.trace["logs"].add(name)
+        else:
+            self.trace["channels"].add(name)
+        return channel
+
+    @contextmanager
+    def scope(self, name):
+        self.trace["scopes"].add(name)
+        yield
+
+    def set_time(self, time):
+        for channel in self.channels.values():
+            channel.set_time(time)
+
+
+class TTLHandler:
+    def __init__(self, manager, name):
+        self.name = name
+        self.channel_value = manager.get_channel("ttl/" + name, 1)
         self.last_value = "X"
         self.oe = True
 
@@ -206,10 +257,10 @@ class TTLHandler:
 
 
 class TTLClockGenHandler:
-    def __init__(self, vcd_manager, name, ref_period):
+    def __init__(self, manager, name, ref_period):
         self.name = name
         self.ref_period = ref_period
-        self.channel_frequency = vcd_manager.get_channel(
+        self.channel_frequency = manager.get_channel(
             "ttl_clkgen/" + name, 64)
 
     def process_message(self, message):
@@ -221,8 +272,8 @@ class TTLClockGenHandler:
 
 
 class DDSHandler:
-    def __init__(self, vcd_manager, onehot_sel, sysclk):
-        self.vcd_manager = vcd_manager
+    def __init__(self, manager, onehot_sel, sysclk):
+        self.manager = manager
         self.onehot_sel = onehot_sel
         self.sysclk = sysclk
 
@@ -231,11 +282,11 @@ class DDSHandler:
 
     def add_dds_channel(self, name, dds_channel_nr):
         dds_channel = dict()
-        with self.vcd_manager.scope("dds/{}".format(name)):
+        with self.manager.scope("dds/{}".format(name)):
             dds_channel["vcd_frequency"] = \
-                self.vcd_manager.get_channel(name + "/frequency", 64)
+                self.manager.get_channel(name + "/frequency", 64)
             dds_channel["vcd_phase"] = \
-                self.vcd_manager.get_channel(name + "/phase", 64)
+                self.manager.get_channel(name + "/phase", 64)
         dds_channel["ftw"] = [None, None]
         dds_channel["pow"] = None
         self.dds_channels[dds_channel_nr] = dds_channel
@@ -285,10 +336,10 @@ class DDSHandler:
 
 
 class WishboneHandler:
-    def __init__(self, vcd_manager, name, read_bit):
+    def __init__(self, manager, name, read_bit):
         self._reads = []
         self._read_bit = read_bit
-        self.stb = vcd_manager.get_channel("{}/{}".format(name, "stb"), 1)
+        self.stb = manager.get_channel("{}/{}".format(name, "stb"), 1)
 
     def process_message(self, message):
         self.stb.set_value("1")
@@ -318,15 +369,15 @@ class WishboneHandler:
 
 
 class SPIMasterHandler(WishboneHandler):
-    def __init__(self, vcd_manager, name):
+    def __init__(self, manager, name):
         self.channels = {}
-        with vcd_manager.scope("spi/{}".format(name)):
-            super().__init__(vcd_manager, name, read_bit=0b100)
+        with manager.scope("spi/{}".format(name)):
+            super().__init__(manager, name, read_bit=0b100)
             for reg_name, reg_width in [
                     ("config", 32), ("chip_select", 16),
                     ("write_length", 8), ("read_length", 8),
                     ("write", 32), ("read", 32)]:
-                self.channels[reg_name] = vcd_manager.get_channel(
+                self.channels[reg_name] = manager.get_channel(
                         "{}/{}".format(name, reg_name), reg_width)
 
     def process_write(self, address, data):
@@ -352,11 +403,11 @@ class SPIMasterHandler(WishboneHandler):
 
 
 class SPIMaster2Handler(WishboneHandler):
-    def __init__(self, vcd_manager, name):
+    def __init__(self, manager, name):
         self._reads = []
         self.channels = {}
-        with vcd_manager.scope("spi2/{}".format(name)):
-            self.stb = vcd_manager.get_channel("{}/{}".format(name, "stb"), 1)
+        with manager.scope("spi2/{}".format(name)):
+            self.stb = manager.get_channel("{}/{}".format(name, "stb"), 1)
             for reg_name, reg_width in [
                     ("flags", 8),
                     ("length", 5),
@@ -364,7 +415,7 @@ class SPIMaster2Handler(WishboneHandler):
                     ("chip_select", 8),
                     ("write", 32),
                     ("read", 32)]:
-                self.channels[reg_name] = vcd_manager.get_channel(
+                self.channels[reg_name] = manager.get_channel(
                         "{}/{}".format(name, reg_name), reg_width)
 
     def process_message(self, message):
@@ -413,11 +464,12 @@ def _extract_log_chars(data):
 
 
 class LogHandler:
-    def __init__(self, vcd_manager, vcd_log_channels):
-        self.vcd_channels = dict()
-        for name, maxlength in vcd_log_channels.items():
-            self.vcd_channels[name] = vcd_manager.get_channel("log/" + name,
-                                                              maxlength*8)
+    def __init__(self, manager, log_channels):
+        self.channels = dict()
+        for name, maxlength in log_channels.items():
+            self.channels[name] = manager.get_channel("log/" + name,
+                                                              maxlength*8,
+                                                              True)
         self.current_entry = ""
 
     def process_message(self, message):
@@ -425,15 +477,15 @@ class LogHandler:
             self.current_entry += _extract_log_chars(message.data)
             if len(self.current_entry) > 1 and self.current_entry[-1] == "\x1D":
                 channel_name, log_message = self.current_entry[:-1].split("\x1E", maxsplit=1)
-                vcd_value = ""
+                value = ""
                 for c in log_message:
-                    vcd_value += "{:08b}".format(ord(c))
-                self.vcd_channels[channel_name].set_value(vcd_value)
+                    value += "{:08b}".format(ord(c))
+                self.channels[channel_name].set_value(value)
                 self.current_entry = ""
 
 
-def get_vcd_log_channels(log_channel, messages):
-    vcd_log_channels = dict()
+def get_log_channels(log_channel, messages):
+    log_channels = dict()
     log_entry = ""
     for message in messages:
         if (isinstance(message, OutputMessage)
@@ -442,13 +494,13 @@ def get_vcd_log_channels(log_channel, messages):
             if len(log_entry) > 1 and log_entry[-1] == "\x1D":
                 channel_name, log_message = log_entry[:-1].split("\x1E", maxsplit=1)
                 l = len(log_message)
-                if channel_name in vcd_log_channels:
-                    if vcd_log_channels[channel_name] < l:
-                        vcd_log_channels[channel_name] = l
+                if channel_name in log_channels:
+                    if log_channels[channel_name] < l:
+                        log_channels[channel_name] = l
                 else:
-                    vcd_log_channels[channel_name] = l
+                    log_channels[channel_name] = l
                 log_entry = ""
-    return vcd_log_channels
+    return log_channels
 
 
 def get_single_device_argument(devices, module, cls, argument):
@@ -475,7 +527,7 @@ def get_dds_sysclk(devices):
                                       ("AD9914",), "sysclk")
 
 
-def create_channel_handlers(vcd_manager, devices, ref_period,
+def create_channel_handlers(manager, devices, ref_period,
                             dds_sysclk, dds_onehot_sel):
     channel_handlers = dict()
     for name, desc in sorted(devices.items(), key=itemgetter(0)):
@@ -483,11 +535,11 @@ def create_channel_handlers(vcd_manager, devices, ref_period,
             if (desc["module"] == "artiq.coredevice.ttl"
                     and desc["class"] in {"TTLOut", "TTLInOut"}):
                 channel = desc["arguments"]["channel"]
-                channel_handlers[channel] = TTLHandler(vcd_manager, name)
+                channel_handlers[channel] = TTLHandler(manager, name)
             if (desc["module"] == "artiq.coredevice.ttl"
                     and desc["class"] == "TTLClockGen"):
                 channel = desc["arguments"]["channel"]
-                channel_handlers[channel] = TTLClockGenHandler(vcd_manager, name, ref_period)
+                channel_handlers[channel] = TTLClockGenHandler(manager, name, ref_period)
             if (desc["module"] == "artiq.coredevice.ad9914"
                     and desc["class"] == "AD9914"):
                 dds_bus_channel = desc["arguments"]["bus_channel"]
@@ -495,14 +547,14 @@ def create_channel_handlers(vcd_manager, devices, ref_period,
                 if dds_bus_channel in channel_handlers:
                     dds_handler = channel_handlers[dds_bus_channel]
                 else:
-                    dds_handler = DDSHandler(vcd_manager, dds_onehot_sel, dds_sysclk)
+                    dds_handler = DDSHandler(manager, dds_onehot_sel, dds_sysclk)
                     channel_handlers[dds_bus_channel] = dds_handler
                 dds_handler.add_dds_channel(name, dds_channel)
             if (desc["module"] == "artiq.coredevice.spi2" and
                     desc["class"] == "SPIMaster"):
                 channel = desc["arguments"]["channel"]
                 channel_handlers[channel] = SPIMaster2Handler(
-                        vcd_manager, name)
+                        manager, name)
     return channel_handlers
 
 
@@ -512,11 +564,20 @@ def get_message_time(message):
 
 def decoded_dump_to_vcd(fileobj, devices, dump, uniform_interval=False):
     vcd_manager = VCDManager(fileobj)
+    _decoded_dump_to_target(vcd_manager, devices, dump, uniform_interval)
+
+
+def decoded_dump_to_waveform(trace, devices, dump, uniform_interval=False):
+    manager = WaveformManager(trace)
+    _decoded_dump_to_target(manager, devices, dump, uniform_interval)
+
+
+def _decoded_dump_to_target(manager, devices, dump, uniform_interval):
     ref_period = get_ref_period(devices)
 
     if ref_period is not None:
         if not uniform_interval:
-            vcd_manager.set_timescale_ps(ref_period*1e12)
+            manager.set_timescale_ps(ref_period*1e12)
     else:
         logger.warning("unable to determine core device ref_period")
         ref_period = 1e-9  # guess
@@ -533,20 +594,20 @@ def decoded_dump_to_vcd(fileobj, devices, dump, uniform_interval=False):
     messages = sorted(messages, key=get_message_time)
 
     channel_handlers = create_channel_handlers(
-        vcd_manager, devices, ref_period,
+        manager, devices, ref_period,
         dds_sysclk, dump.dds_onehot_sel)
-    vcd_log_channels = get_vcd_log_channels(dump.log_channel, messages)
+    log_channels = get_log_channels(dump.log_channel, messages)
     channel_handlers[dump.log_channel] = LogHandler(
-        vcd_manager, vcd_log_channels)
+        manager, log_channels)
     if uniform_interval:
         # RTIO event timestamp in machine units
-        timestamp = vcd_manager.get_channel("timestamp", 64)
+        timestamp = manager.get_channel("timestamp", 64)
         # RTIO time interval between this and the next timed event
         # in SI seconds
-        interval = vcd_manager.get_channel("interval", 64)
-    slack = vcd_manager.get_channel("rtio_slack", 64)
+        interval = manager.get_channel("interval", 64)
+    slack = manager.get_channel("rtio_slack", 64)
 
-    vcd_manager.set_time(0)
+    manager.set_time(0)
     start_time = 0
     for m in messages:
         start_time = get_message_time(m)
@@ -560,11 +621,11 @@ def decoded_dump_to_vcd(fileobj, devices, dump, uniform_interval=False):
             if t >= 0:
                 if uniform_interval:
                     interval.set_value_double((t - t0)*ref_period)
-                    vcd_manager.set_time(i)
+                    manager.set_time(i)
                     timestamp.set_value("{:064b}".format(t))
                     t0 = t
                 else:
-                    vcd_manager.set_time(t)
+                    manager.set_time(t)
             channel_handlers[message.channel].process_message(message)
             if isinstance(message, OutputMessage):
                 slack.set_value_double(
