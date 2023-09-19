@@ -81,7 +81,11 @@ class EnumerationValue(_SimpleArgProcessor):
     :param choices: A list of string representing the possible values of the
         argument.
     """
-    def __init__(self, choices, default=NoDefault):
+    def __init__(self, choices=None, default=NoDefault):
+        if choices is None:
+            if default is NoDefault:
+                raise ValueError("Invalid EnumerationValue value")
+            choices = [default]
         self.choices = choices
         super().__init__(default)
 
