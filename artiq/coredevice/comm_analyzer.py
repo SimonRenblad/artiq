@@ -168,8 +168,8 @@ class VCDManager:
         return VCDChannel(self.out, code)
 
     @contextmanager
-    def scope(self, name):
-        self.out.write("$scope module {} $end\n".format(name))
+    def scope(self, scope, name):
+        self.out.write("$scope module {}/{} $end\n".format(scope, name))
         yield
         self.out.write("$upscope $end\n")
 
@@ -180,38 +180,44 @@ class VCDManager:
 
 
 class WaveformChannel:
-    def __init__(self, name, trace, current_time):
+    def __init__(self, name, trace, current_time, scope):
         self.name = name
         self.trace = trace
+        self.scope = scope
         self.current_time = current_time
-        self.trace["data"][name] = list()
+        self.trace["data"].setdefault(scope, dict())
+        self.trace["data"][scope][name] = list()
 
     def set_value(self, value):
         if value == "X":
             value = np.nan
         else:
             value = int(value, 2)
-        self.trace["data"][self.name].append((value, self.current_time))
+        self.trace["data"][self.scope][self.name].append((value, self.current_time))
 
     def set_value_double(self, x):
-        self.trace["data"][self.name].append((x, self.current_time))
+        self.trace["data"][self.scope][self.name].append((x, self.current_time))
 
     def set_time(self, time):
         self.current_time = time
 
 
+
 class WaveformManager:
+    DEFAULT_SCOPE = "<default>"
+
     def __init__(self, trace):
         self.current_time = 0
         self.timescale = None
         self.channels = dict()
         self.trace = trace
+        self.current_scope = WaveformManager.DEFAULT_SCOPE
 
     def set_timescale_ps(self, timescale):
         self.timescale = timescale * 1e-9
 
     def get_channel(self, name, width, is_log=False):
-        channel = WaveformChannel(name, self.trace, self.current_time)
+        channel = WaveformChannel(name, self.trace, self.current_time, self.current_scope)
         self.channels[name] = channel
         if is_log:
             self.trace["logs"].add(name)
@@ -220,9 +226,10 @@ class WaveformManager:
         return channel
 
     @contextmanager
-    def scope(self, name):
-        self.trace["scopes"].add(name)
+    def scope(self, scope, name):
+        self.current_scope = scope
         yield
+        self.current_scope = WaveformManager.DEFAULT_SCOPE
 
     def set_time(self, time):
         for channel in self.channels.values():
@@ -282,7 +289,7 @@ class DDSHandler:
 
     def add_dds_channel(self, name, dds_channel_nr):
         dds_channel = dict()
-        with self.manager.scope("dds/{}".format(name)):
+        with self.manager.scope("dds", name):
             dds_channel["vcd_frequency"] = \
                 self.manager.get_channel(name + "/frequency", 64)
             dds_channel["vcd_phase"] = \
@@ -371,7 +378,8 @@ class WishboneHandler:
 class SPIMasterHandler(WishboneHandler):
     def __init__(self, manager, name):
         self.channels = {}
-        with manager.scope("spi/{}".format(name)):
+        self.scope = "spi"
+        with manager.scope("spi", name):
             super().__init__(manager, name, read_bit=0b100)
             for reg_name, reg_width in [
                     ("config", 32), ("chip_select", 16),
@@ -406,7 +414,8 @@ class SPIMaster2Handler(WishboneHandler):
     def __init__(self, manager, name):
         self._reads = []
         self.channels = {}
-        with manager.scope("spi2/{}".format(name)):
+        self.scope = "spi2"
+        with manager.scope("spi2", name):
             self.stb = manager.get_channel("{}/{}".format(name, "stb"), 1)
             for reg_name, reg_width in [
                     ("flags", 8),
