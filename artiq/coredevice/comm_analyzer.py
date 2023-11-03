@@ -162,6 +162,8 @@ class VCDManager:
         self.out.write("$timescale {}ps $end\n".format(round(timescale)))
 
     def get_channel(self, name, width, is_log=False):
+        if is_log:
+            name = "log/" + name
         code = next(self.codes)
         self.out.write("$var wire {width} {code} {name} $end\n"
                        .format(name=name, code=code, width=width))
@@ -180,27 +182,22 @@ class VCDManager:
 
 
 class WaveformChannel:
-    def __init__(self, name, trace, current_time, scope):
-        self.name = name
-        self.trace = trace
-        self.scope = scope
+    def __init__(self, data, current_time):
+        self.data = data
         self.current_time = current_time
-        self.trace["data"].setdefault(scope, dict())
-        self.trace["data"][scope][name] = list()
 
     def set_value(self, value):
         if value == "X":
             value = np.nan
         else:
             value = int(value, 2)
-        self.trace["data"][self.scope][self.name].append((value, self.current_time))
+        self.data.append((value, self.current_time))
 
     def set_value_double(self, x):
-        self.trace["data"][self.scope][self.name].append((x, self.current_time))
+        self.data.append((x, self.current_time))
 
     def set_time(self, time):
         self.current_time = time
-
 
 
 class WaveformManager:
@@ -209,7 +206,7 @@ class WaveformManager:
     def __init__(self, trace):
         self.current_time = 0
         self.timescale = None
-        self.channels = dict()
+        self.channels = list()
         self.trace = trace
         self.current_scope = WaveformManager.DEFAULT_SCOPE
 
@@ -217,12 +214,12 @@ class WaveformManager:
         self.timescale = timescale * 1e-9
 
     def get_channel(self, name, width, is_log=False):
-        channel = WaveformChannel(name, self.trace, self.current_time, self.current_scope)
-        self.channels[name] = channel
         if is_log:
-            self.trace["logs"].add(name)
+            data = self.trace["logs"][name] = list()
         else:
-            self.trace["channels"].add(name)
+            data = self.trace["data"].setdefault(self.current_scope, dict())[name] = list()
+        channel = WaveformChannel(data, self.current_time)
+        self.channels.append(channel)
         return channel
 
     @contextmanager
@@ -232,7 +229,7 @@ class WaveformManager:
         self.current_scope = WaveformManager.DEFAULT_SCOPE
 
     def set_time(self, time):
-        for channel in self.channels.values():
+        for channel in self.channels:
             channel.set_time(time)
 
 
@@ -476,7 +473,7 @@ class LogHandler:
     def __init__(self, manager, log_channels):
         self.channels = dict()
         for name, maxlength in log_channels.items():
-            self.channels[name] = manager.get_channel("log/" + name,
+            self.channels[name] = manager.get_channel(name,
                                                               maxlength*8,
                                                               True)
         self.current_entry = ""
