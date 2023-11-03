@@ -3,346 +3,645 @@ from PyQt5.QtCore import Qt
 
 from sipyco.sync_struct import Subscriber
 from sipyco.pc_rpc import AsyncioClient
-from sipyco import pyon
 
 from artiq.tools import exc_to_warning
 from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
-from artiq.coredevice.comm_analyzer import decode_dump, decoded_dump_to_waveform, decoded_dump_to_vcd
-
+from artiq.gui.dndwidgets import DragDropSplitter, VDragScrollArea
+from artiq.coredevice.comm_analyzer import (async_decoded_dump_to_vcd, get_channel_list,
+                                            async_decoded_dump_to_waveform,
+                                            async_decode_dump)
+import os
 import numpy as np
+from operator import setitem
 import pyqtgraph as pg
 import asyncio
-import time
 import logging
 
 logger = logging.getLogger(__name__)
 
+
 class _AddChannelDialog(QtWidgets.QDialog):
     accepted = QtCore.pyqtSignal(list)
 
-    def __init__(self, parent, channels):
+    def __init__(self, parent, state):
         QtWidgets.QDialog.__init__(self, parent=parent)
+        self.channels = state["channels"]
+
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
-        self.setWindowTitle("Add channels")   
-        self.parent = parent
-
+        self.setWindowTitle("Add channels")
         grid = QtWidgets.QGridLayout()
-        grid.setRowMinimumHeight(1, 40)
-        grid.setColumnMinimumWidth(2, 60)
         self.setLayout(grid)
+        self._channels_widget = QtWidgets.QTreeWidget()
+        self._channels_widget.setHeaderLabel("Channels")
+        self._channels_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        grid.addWidget(self._channels_widget, 0, 0, 1, 2)
 
-        self.waveform_channel_list = QtWidgets.QListWidget()
-        self.waveform_channel_list.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-        grid.addWidget(self.waveform_channel_list, 0, 0, 1, 2)
-        self.waveform_channel_list.itemDoubleClicked.connect(self.add_channels)
-        for channel in sorted(channels):
-            self.waveform_channel_list.addItem(channel)
-
-        enter_action = QtWidgets.QAction("Add channels", self)
-        enter_action.setShortcut("RETURN")
-        enter_action.setShortcutContext(Qt.WidgetShortcut)
-        self.addAction(enter_action)
-        enter_action.triggered.connect(self.add_channels)
+        groups = dict()
+        for scope, channel, _ in self.channels:
+            if scope not in groups:
+                group = QtWidgets.QTreeWidgetItem([scope])
+                group.setFlags(group.flags() & ~QtCore.Qt.ItemIsSelectable)
+                self._channels_widget.addTopLevelItem(group)
+                groups[scope] = group
+            item = QtWidgets.QTreeWidgetItem([channel])
+            groups[scope].addChild(item)
 
         cancel_button = QtWidgets.QPushButton("Cancel")
         cancel_button.clicked.connect(self.close)
+        cancel_button.setIcon(
+            QtWidgets.QApplication.style().standardIcon(
+                QtWidgets.QStyle.SP_DialogCancelButton))
         grid.addWidget(cancel_button, 1, 0)
-
         confirm_button = QtWidgets.QPushButton("Confirm")
         confirm_button.clicked.connect(self.add_channels)
+        confirm_button.setIcon(
+            QtWidgets.QApplication.style().standardIcon(
+                QtWidgets.QStyle.SP_DialogApplyButton))
         grid.addWidget(confirm_button, 1, 1)
 
     def add_channels(self):
-        channels = self.waveform_channel_list.selectedItems()
-        channels = [c.text() for c in channels]
-        self.accepted.emit(channels)
+        items = self._channels_widget.selectedItems()
+        items = [(i.parent().text(0), i.text(0)) for i in items]
+        selected_channels = [channel for channel in self.channels
+                             if channel[0:2] in items]
+        self.accepted.emit(selected_channels)
         self.close()
 
 
-class _ChannelWidget(QtWidgets.QWidget):
+class Waveform(pg.PlotWidget):
+    MIN_HEIGHT = 100
+    MAX_HEIGHT = 200
+    PREF_HEIGHT = 150
 
-    def __init__(self, channel, parent=None):
-        QtWidgets.QWidget.__init__(self, parent=parent)
-        self.channel = channel
-        self.parent = parent
-        self.setMinimumHeight(300)
+    cursorMoved = QtCore.pyqtSignal(float)
 
-        frame_layout = QtWidgets.QVBoxLayout()
-        frame = QtWidgets.QFrame()
-        frame.setFrameShape(QtWidgets.QFrame.Box)
-        frame_layout.addWidget(frame)
-        self.setLayout(frame_layout)
-        layout = QtWidgets.QHBoxLayout()
-        frame.setLayout(layout)
-        self.label = QtWidgets.QLabel(channel)
-        self.label.setMinimumWidth(50)
-        layout.addWidget(self.label, 2)
+    def __init__(self, channel, state, parent=None):
+        pg.PlotWidget.__init__(self, parent=parent, x=None, y=None)
+        self.setMinimumHeight(Waveform.MIN_HEIGHT)
+        self.setMaximumHeight(Waveform.MAX_HEIGHT)
+        self.setMenuEnabled(False)
 
-        pi = pg.PlotItem(x=None,
-                         y=None,
-                         pen="r",
-                         stepMode="right",
-                         connect="finite")
-        pi.showGrid(x=True, y=True)
-        pi.getAxis("left").setStyle(tickTextWidth=100, autoExpandTextSpace=False)
-        self.waveform = pg.PlotWidget(plotItem=pi)
-        layout.addWidget(self.waveform, 8)
+        self._scope = channel[0]
+        self._name = channel[1]
+        self._ddb_name = channel[2]
 
-        self.label.setContextMenuPolicy(Qt.ActionsContextMenu)
-        insert_action = QtWidgets.QAction("Insert channels below...", self)
-        insert_action.triggered.connect(self.insert_channel)
-        self.label.addAction(insert_action)
-        move_up_action = QtWidgets.QAction("Move channel up", self)
-        move_up_action.triggered.connect(self.move_channel_up)
-        self.label.addAction(move_up_action)
-        move_down_action = QtWidgets.QAction("Move channel down", self)
-        move_down_action.triggered.connect(self.move_channel_down)
-        self.label.addAction(move_down_action)
-        remove_channel_action = QtWidgets.QAction("Delete channel", self)
-        remove_channel_action.triggered.connect(self.remove_channel)
-        self.label.addAction(remove_channel_action)
+        self._state = state
+        self._logs = list()
+        self._symbol = "t"
+        self._is_show_logs = True
+        self._is_show_markers = False
+        self._is_show_cursor = True
+        self._is_digital = True
 
-    def load_data(self, data):
+        self._pi = self.getPlotItem()
+        self._pi.setRange(yRange=(0, 1), padding=0.1)
+        self._pi.hideButtons()
+        self._pi.getAxis("bottom").setStyle(showValues=False, tickLength=0)
+        self._pi.hideAxis("top")
+        self._pi.setLabel("left", "/".join(channel[0:2]))
+
+        self._pdi = self._pi.listDataItems()[0]
+        pdi_opts = {
+            "pen": "r",
+            "stepMode": "right",
+            "connect": "finite",
+            "clipToView": True,
+            "downsample": 10,
+            "autoDownsample": True,
+            "downsampleMethod": "peak",
+            "symbolPen": "r",
+            "symbolBrush": "r"
+        }
+        self._pdi.opts.update(pdi_opts)
+
+        self._vb = self._pi.getViewBox()
+        self._vb.setMouseEnabled(x=True, y=False)
+        self._vb.enableAutoRange(axis=pg.ViewBox.YAxis, enable=False)
+
+        self._left_ax = self._pi.getAxis("left")
+        self._left_ax.setWidth(120)
+
+        self._cursor = pg.InfiniteLine()
+        self._cursor_label = pg.InfLineLabel(self._cursor, text='0')
+        self.addItem(self._cursor)
+
+        self.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
+        self._set_digital(True)
+
+    def _set_digital(self, digital):
+        if digital:
+            self._left_ax.setTicks([[(0, "0"), (1, "1")], []])
+        else:
+            self._left_ax.setTicks(None)
+        self._is_digital = digital
+
+    def _set_data_range(self, data_range):
+        if data_range in [(0, 1), (0, 0)]:
+            self._set_digital(True)
+            self._pi.setRange(yRange=(0, 1), padding=0.1)
+        else:
+            self._set_digital(False)
+            self._pi.setRange(yRange=data_range, padding=0.1)
+
+    def on_load_data(self):
+        data = self._state["data"]
         try:
-            y_data, x_data = zip(*data)
-            self.waveform.getPlotItem().listDataItems()[0].setData(x=x_data, y=y_data)
+            d = np.array(data[self._scope][self._name])
+            data_range = (np.min(d[:, 1]), np.max(d[:, 1]))
+            self._set_data_range(data_range)
+            self._pdi.setData(d)
         except:
-            logger.warn("Unable to load data for {}".format(self.channel), exc_info=1)
-            self.waveform.getPlotItem().listDataItems()[0].setData(x=np.zeros(1), y=np.zeros(1))
+            logger.debug("Unable to load data for {}/{}".format(self._scope, self._name))
+            self._set_data_range((0, 0))
+            self._pdi.setData(x=np.zeros(1), y=np.zeros(1))
 
-    def insert_channel(self):
-        next_ind = self.parent.plot_widgets.index(self) + 1
-        self.parent.insert_plot_dialog(next_ind)
+    def on_load_logs(self):
+        logs = self._state["logs"]
+        msgs = logs.get(self._ddb_name, [])
+        for t, msg in msgs:
+            lbl = pg.TextItem(anchor=(0, 1))
+            arw = pg.ArrowItem(angle=270, pxMode=True, headLen=5, tailLen=15, tailWidth=1)
+            self.addItem(lbl)
+            self.addItem(arw)
+            lbl.setPos(t, 0)
+            lbl.setText(msg)
+            arw.setPos(t, 0)
+            self._logs.append(lbl)
+            self._logs.append(arw)
 
-    def move_channel_up(self):
-        ind = self.parent.plot_widgets.index(self)
-        if ind != 0:
-            self.parent.move_up(ind)
+    def on_toggle_logs(self):
+        if self._is_show_logs:
+            for lbl in self._logs:
+                self.removeItem(lbl)
+            self._is_show_logs = False
+        else:
+            for lbl in self._logs:
+                self.addItem(lbl)
+            self._is_show_logs = True
 
-    def move_channel_down(self):
-        ind = self.parent.plot_widgets.index(self)
-        l = len(self.parent.plot_widgets)
-        if ind != l - 1:
-            self.parent.move_down(ind)
+    def on_set_cursor_visible(self, visible):
+        if visible:
+            self.removeItem(self._cursor)
+            self._is_show_cursor = False
+        else:
+            self.addItem(self._cursor)
+            self._is_show_cursor = True
 
-    def remove_channel(self):
-        ind = self.parent.plot_widgets.index(self)
-        self.parent.remove_plot(ind)
+    def on_toggle_markers(self):
+        if self._is_show_markers:
+            self._pdi.setSymbol(None)
+            self._is_show_markers = False
+        else:
+            self._pdi.setSymbol(self._symbol)
+            self._is_show_markers = True
+
+    def on_cursor_moved(self, x):
+        self._cursor.setValue(x)
+        ind = np.searchsorted(self._pdi.xData, x, side="left") - 1
+        dr = self._pdi.dataRect()
+        if dr is not None and dr.left() <= x <= dr.right() \
+                and 0 <= ind < len(self._pdi.yData):
+            val = self._pdi.yData[ind]
+            if self._is_digital:
+                val = int(val)
+            self._cursor_label.setText(str(val))
+        else:
+            self._cursor_label.setText("x")
+
+    # override
+    def mouseMoveEvent(self, e):
+        if e.buttons() == QtCore.Qt.LeftButton \
+           and e.modifiers() != QtCore.Qt.NoModifier:
+            drag = QtGui.QDrag(self)
+            mime = QtCore.QMimeData()
+            drag.setMimeData(mime)
+            pixmapi = QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.SP_FileIcon)
+            drag.setPixmap(pixmapi.pixmap(32))
+            drag.exec_(QtCore.Qt.MoveAction)
+        else:
+            super().mouseMoveEvent(e)
+
+    # override
+    def mouseDoubleClickEvent(self, e):
+        pos = self._vb.mapSceneToView(e.pos())
+        self.cursorMoved.emit(pos.x())
 
 
-class _WaveformWidget(QtWidgets.QWidget):
-    mouseMoved = QtCore.pyqtSignal(float, float)
+class WaveformArea(QtWidgets.QWidget):
+    cursorMoved = QtCore.pyqtSignal(float)
 
-    def __init__(self, parent, trace):
+    def __init__(self, parent, state):
         QtWidgets.QWidget.__init__(self, parent=parent)
-        self.trace = trace
+        self._state = state
 
-        self.plot_layout = QtWidgets.QVBoxLayout()
-        self.plot_layout.setSpacing(1) 
-        scroll_area = QtWidgets.QScrollArea()
+        self._is_show_cursor = True
+        self._cursor_x_pos = 0
+
+        layout = QtWidgets.QVBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self.setLayout(layout)
+
+        self._ref_axis = pg.PlotWidget()
+        self._ref_axis.hideAxis("bottom")
+        self._ref_axis.hideButtons()
+        self._ref_axis.setFixedHeight(45)
+        self._ref_axis.setMenuEnabled(False)
+        top = pg.AxisItem("top")
+        top.setLabel("", units="s")
+        left = pg.AxisItem("left")
+        left.setStyle(textFillLimits=(0, 0))
+        left.setFixedHeight(0)
+        left.setWidth(120)
+        self._ref_axis.setAxisItems({"top": top, "left": left})
+
+        self._ref_vb = self._ref_axis.getPlotItem().getViewBox()
+        self._ref_vb.setFixedHeight(0)
+        self._ref_vb.setMouseEnabled(x=True, y=False)
+        layout.addWidget(self._ref_axis)
+
+        scroll_area = VDragScrollArea(self)
         scroll_area.setWidgetResizable(True)
-        widget = QtWidgets.QWidget()
-        widget.setLayout(self.plot_layout)
-        scroll_area.setWidget(widget)
-        main_layout = QtWidgets.QVBoxLayout()
-        main_layout.addWidget(scroll_area)
-        self.setLayout(main_layout)
-        self.plot_widgets = list()
+        scroll_area.setContentsMargins(0, 0, 0, 0)
+        scroll_area.setFrameShape(QtWidgets.QFrame.NoFrame)
 
-    async def get_channels_from_dialog(self):
-        channels = self.trace["channels"]
-        dialog = _AddChannelDialog(self, channels)
+        self._waveform_area = DragDropSplitter(parent=scroll_area)
+        scroll_area.setWidget(self._waveform_area)
+
+        layout.addWidget(scroll_area)
+
+    def _add_waveform_actions(self, waveform):
+        action = QtWidgets.QAction("Show RTIO logs", waveform)
+        action.setCheckable(True)
+        action.setChecked(True)
+        action.triggered.connect(waveform.on_toggle_logs)
+        waveform.addAction(action)
+
+        action = QtWidgets.QAction("Show message markers", waveform)
+        action.setCheckable(True)
+        action.setChecked(False)
+        action.triggered.connect(waveform.on_toggle_markers)
+        waveform.addAction(action)
+
+        action = QtWidgets.QAction(waveform)
+        action.setSeparator(True)
+        waveform.addAction(action)
+
+        action = QtWidgets.QAction("Toggle cursor visible", waveform)
+        action.triggered.connect(self._on_toggle_cursor)
+        waveform.addAction(action)
+
+        action = QtWidgets.QAction("Delete waveform", waveform)
+        action.triggered.connect(lambda: self._remove_plot(waveform))
+        waveform.addAction(action)
+
+        action = QtWidgets.QAction("Delete all", waveform)
+        action.triggered.connect(self._clear_plots)
+        waveform.addAction(action)
+
+        action = QtWidgets.QAction("Reset waveform heights", waveform)
+        action.triggered.connect(self._waveform_area.resetSizes)
+        waveform.addAction(action)
+
+    def _add_plot(self, channel):
+        num_channels = self._waveform_area.count()
+        self._waveform_area.setFixedHeight((num_channels + 1) * Waveform.PREF_HEIGHT)
+        cw = Waveform(channel, self._state, parent=self._waveform_area)
+        cw.cursorMoved.connect(lambda x: self.on_cursor_moved(x))
+        cw.cursorMoved.connect(self.cursorMoved.emit)
+        self._add_waveform_actions(cw)
+        cw.setXLink(self._ref_vb)
+        cw.getPlotItem().showGrid(x=True, y=True)
+        self._waveform_area.addWidget(cw)
+        cw.on_load_data()
+        cw.on_load_logs()
+        cw.on_cursor_moved(self._cursor_x_pos)
+
+    async def _get_channels_from_dialog(self):
+        dialog = _AddChannelDialog(self, self._state)
         fut = asyncio.Future()
+
         def on_accept(s):
             fut.set_result(s)
         dialog.accepted.connect(on_accept)
         dialog.open()
         return await fut
 
-    def add_plot(self, channel):
-        data = self.trace["data"]
-        channel_widget = _ChannelWidget(channel, parent=self)
-        if channel in data:
-            channel_widget.load_data(data[channel])
-        self.plot_layout.addWidget(channel_widget)
-        self.plot_widgets.append(channel_widget)
-
-    async def add_plots_dialog_task(self):
-        channels = await self.get_channels_from_dialog()
+    async def _add_plots_dialog_task(self):
+        channels = await self._get_channels_from_dialog()
         for channel in channels:
-            self.add_plot(channel)
+            self._add_plot(channel)
 
     def add_plots_dialog(self):
-        asyncio.ensure_future(self.add_plots_dialog_task())
+        asyncio.ensure_future(exc_to_warning(self._add_plots_dialog_task()))
 
-    def insert_plot(self, channel, index):
-        data = self.trace["data"]
-        channel_widget = _ChannelWidget(channel, parent=self)
-        if channel in data:
-            channel_widget.load_data(data[channel])
-        self.plot_layout.insertWidget(index, channel_widget)
-        self.plot_widgets.insert(index, channel_widget)
+    def _remove_plot(self, cw):
+        num_channels = self._waveform_area.count() - 1
+        cw.deleteLater()
+        self._waveform_area.setFixedHeight(num_channels * Waveform.PREF_HEIGHT)
+        self._waveform_area.refresh()
 
-    async def insert_plot_dialog_task(self, index):
-        channels = await self.get_channels_from_dialog()
-        for channel in channels:
-            self.insert_plot(channel, index)
+    def _update_xrange(self):
+        data = self._state["data"]
+        logs = self._state["logs"]
+        maximum = 0
+        for scopes in data.values():
+            for d in scopes.values():
+                if d is None or len(d) == 0:
+                    continue
+                temp = d[-1][0]
+                if maximum < temp:
+                    maximum = temp
+        for d in logs.values():
+            if d is None or len(d) == 0:
+                continue
+            temp = d[-1][0]
+            if maximum < temp:
+                maximum = temp
+        self._ref_axis.setRange(xRange=(0, maximum))
 
-    def insert_plot_dialog(self, index):
-        asyncio.ensure_future(self.insert_plot_dialog_task(index))
+    def _clear_plots(self):
+        for i in reversed(range(self._waveform_area.count())):
+            cw = self._waveform_area.widget(i)
+            self._remove_plot(cw)
 
-    def remove_plot(self, index):
-        widget = self.plot_layout.takeAt(index)
-        self.plot_widgets.pop(index)
-        widget.widget().deleteLater()
+    def on_trace_update(self):
+        for i in range(self._waveform_area.count()):
+            cw = self._waveform_area.widget(i)
+            cw.on_load_data()
+            cw.on_load_logs()
+        self._update_xrange()
 
-    def clear_plots(self):
-        for i in reversed(range(len(self.plot_widgets))):
-            self.remove_plot(i)
+    def on_cursor_moved(self, x):
+        self._cursor_x_pos = x
+        for i in range(self._waveform_area.count()):
+            cw = self._waveform_area.widget(i)
+            cw.on_cursor_moved(x)
 
-    def move_down(self, index):
-        self.plot_layout.takeAt(index)
-        widget = self.plot_widgets.pop(index)
-        self.plot_layout.insertWidget(index+1, widget)
-        self.plot_widgets.insert(index+1, widget)
-    
-    def move_up(self, index):
-        self.plot_layout.takeAt(index)
-        widget = self.plot_widgets.pop(index)
-        self.plot_layout.insertWidget(index-1, widget)
-        self.plot_widgets.insert(index-1, widget)
+    def _on_toggle_cursor(self):
+        for i in range(self._waveform_area.count()):
+            cw = self._waveform_area.widget(i)
+            cw.on_set_cursor_visible(self._is_show_cursor)
+        self._is_show_cursor = not self._is_show_cursor
 
-    def refresh_display(self):
-        data = self.trace["data"]
-        for widget in self.plot_widgets:
-            channel = widget.channel
-            widget.load_data(data[channel])
 
-    def prepare_save_list(self):
-        save_list = list()
-        for widget in self.plot_widgets:
-            save_list.append(widget.channel)
-        return pyon.encode(save_list)
-
-    def read_save_list(self, save_list):
-        save_list = pyon.decode(save_list)
-        for i in reversed(range(len(self.plot_widgets))):
-            self.remove_plot(i)
-
-        for channel in save_list:
-            self.add_plot(channel)
-
-    async def save_list_task(self):
-        try:
-            filename = await get_save_file_name(
-                    self,
-                    "Save Channel List",
-                    "c://",
-                    "PYON files (*.pyon)",
-                    suffix="pyon")
-        except asyncio.CancelledError:
-            return
-        try:
-            save_list = self.prepare_save_list()
-            with open(filename, 'w') as f:
-                f.write(save_list)
-        except:
-            logger.error("Failed to save channel list",
-                         exc_info=True)
-
-    async def open_list_task(self):
-        try:
-            filename = await get_open_file_name(
-                    self,
-                    "Load Channel List",
-                    "c://",
-                    "PYON files (*.pyon)")
-        except asyncio.CancelledError:
-            return
-        try:
-            with open(filename, 'r') as f:
-                self.read_save_list(f.read())
-        except:
-            logger.error("Failed to read channel list.",
-                         exc_info=True)
-
-class _TraceManager:
-    def __init__(self, parent, trace, loop):
-        self.parent = parent
-        self.trace = trace
+class WaveformProxyClient:
+    def __init__(self, state, loop):
+        self._state = state
         self._loop = loop
-        self.rtio_addr = None
-        self.rtio_port = None
-        self.rtio_port_control = None
-        self.dump = None
-        self.decoded_dump = None
-        self.subscriber = Subscriber("devices", self.init_ddb, self.update_ddb)
-        self.proxy_client = AsyncioClient()
-        self.trace_subscriber = Subscriber("rtio_trace", self.init_dump, self.update_dump) 
-        self.proxy_reconnect = asyncio.Event()
-        self.dump_updated = asyncio.Event()
-        self.reconnect_task = None
 
-    def update_from_dump(self, dump):
-        self.dump = dump
-        self.decoded_dump = decode_dump(dump)
-        decoded_dump_to_waveform(self.trace, self.ddb, self.decoded_dump)
-        self.parent.traceDataChanged.emit()
-        self.dump_updated.set()
+        self.proxy_sub = None
+        self.devices_sub = None
+        self.rpc_client = AsyncioClient()
 
-    async def open_trace_task(self):
+        self._proxy_addr = None
+        self._proxy_port = None
+        self._proxy_port_ctl = None
+        self._on_sub_reconnect = asyncio.Event()
+        self._on_rpc_reconnect = asyncio.Event()
+        self._reconnect_rpc_task = None
+        self._reconnect_sub_task = None
+
+    async def pull_from_device_task(self):
+        asyncio.ensure_future(exc_to_warning(self.rpc_client.pull_from_device()))
+
+    def update_address(self, addr, port, port_control):
+        self._proxy_addr = addr
+        self._proxy_port = port
+        self._proxy_port_ctl = port_control
+        self._on_rpc_reconnect.set()
+        self._on_sub_reconnect.set()
+
+    # Proxy client connections
+    async def start(self, server, port):
+        self._reconnect_rpc_task = asyncio.ensure_future(self.reconnect_rpc(), loop=self._loop)
+        self._reconnect_sub_task = asyncio.ensure_future(self.reconnect_sub(), loop=self._loop)
+        try:
+            await self.devices_sub.connect(server, port)
+        except:
+            logger.error("Failed to connect to master.", exc_info=True)
+
+    async def reconnect_rpc(self):
+        try:
+            while True:
+                await self._on_rpc_reconnect.wait()
+                self._on_rpc_reconnect.clear()
+                logger.info("Attempting coreanalyzer RPC connection...")
+                try:
+                    await self.rpc_client.connect_rpc(self._proxy_addr,
+                                                      self._proxy_port_ctl,
+                                                      "coreanalyzer_proxy_control")
+                except:
+                    logger.info("coreanalyzer RPC timed out, trying again...")
+                    await asyncio.sleep(5)
+                    self._on_rpc_reconnect.set()
+                else:
+                    logger.info("Connected RPC to core analyzer proxy.")
+        except asyncio.CancelledError:
+            pass
+
+    async def reconnect_sub(self):
+        try:
+            while True:
+                await self._on_sub_reconnect.wait()
+                self._on_sub_reconnect.clear()
+                logger.info("Attempting coreanalyzer subscriber connection...")
+                try:
+                    await self.proxy_sub.connect(self._proxy_addr, self._proxy_port)
+                except:
+                    logger.info("coreanalyzer subscriber timed out, trying again...")
+                    await asyncio.sleep(5)
+                    self._on_sub_reconnect.set()
+                else:
+                    logger.info("Connected subscriber to core analyzer proxy.")
+        except asyncio.CancelledError:
+            pass
+
+    async def stop(self):
+        self._reconnect_rpc_task.cancel()
+        self._reconnect_sub_task.cancel()
+        await asyncio.wait_for(self._reconnect_rpc_task, None)
+        await asyncio.wait_for(self._reconnect_sub_task, None)
+        try:
+            await self.devices_sub.close()
+            self.rpc_client.close_rpc()
+            await self.proxy_sub.close()
+        except:
+            logger.error("Error occurred while closing proxy connections.", exc_info=1)
+
+
+class _CursorTimeControl(QtWidgets.QLineEdit):
+    submit = QtCore.pyqtSignal(float)
+
+    def __init__(self, parent):
+        QtWidgets.QLineEdit.__init__(self, parent=parent)
+        self._value = 0
+        self._val_to_text(0)
+        self.textChanged.connect(self._text_to_val)
+        self.returnPressed.connect(self._on_submit)
+
+    def _text_to_val(self, text):
+        try:
+            self._value = pg.siEval(text)
+        except:
+            pass
+
+    def _val_to_text(self, val):
+        self.setText(pg.siFormat(val, suffix="s", allowUnicode=False))
+
+    def _on_submit(self):
+        self.submit.emit(self._value)
+        self._val_to_text(self._value)
+        self.clearFocus()
+
+    def set_time(self, t):
+        self._val_to_text(t)
+
+
+class WaveformDock(QtWidgets.QDockWidget):
+    traceDataChanged = QtCore.pyqtSignal()
+
+    def __init__(self, loop=None):
+        QtWidgets.QDockWidget.__init__(self, "Waveform")
+        self.setObjectName("Waveform")
+        self.setFeatures(
+            QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable)
+
+        self._state = {
+            "timescale": None,
+            "logs": dict(),
+            "data": dict(),
+            "dump": None,
+            "decoded_dump": None,
+            "ddb": dict(),
+            "channels": list()
+        }
+
+        self._current_dir = "c://"
+
+        self.proxy_client = WaveformProxyClient(self._state, loop)
+        analyzer_proxy_sub = Subscriber("coreanalyzer_proxy_pubsub",
+                                        self.init_dump, self.update_dump)
+        devices_sub = Subscriber("devices", self.init_ddb, self.update_ddb)
+        self.proxy_client.proxy_sub = analyzer_proxy_sub
+        self.proxy_client.devices_sub = devices_sub
+
+        self._decoder_lock = asyncio.Lock()
+
+        grid = LayoutWidget()
+        self.setWidget(grid)
+
+        self._menu_btn = QtWidgets.QPushButton()
+        self._menu_btn.setIcon(
+            QtWidgets.QApplication.style().standardIcon(
+                QtWidgets.QStyle.SP_FileDialogStart))
+        grid.addWidget(self._menu_btn, 0, 0)
+
+        self._pull_btn = QtWidgets.QToolButton()
+        self._pull_btn.setToolTip("Pull device buffer")
+        self._pull_btn.setIcon(
+            QtWidgets.QApplication.style().standardIcon(
+                QtWidgets.QStyle.SP_BrowserReload))
+        grid.addWidget(self._pull_btn, 0, 1)
+        self._pull_btn.clicked.connect(
+            lambda: asyncio.ensure_future(self.proxy_client.pull_from_device_task()))
+
+        self._cursor_control = _CursorTimeControl(self)
+        grid.addWidget(self._cursor_control, 0, 3, colspan=3)
+
+        self._waveform_area = WaveformArea(self, self._state)
+        self.traceDataChanged.connect(lambda: self._waveform_area.on_trace_update())
+        self._cursor_control.submit.connect(self._waveform_area.on_cursor_moved)
+        self._waveform_area.cursorMoved.connect(self._cursor_control.set_time)
+        grid.addWidget(self._waveform_area, 2, 0, colspan=12)
+
+        self._add_btn = QtWidgets.QToolButton()
+        self._add_btn.setToolTip("Add channels...")
+        self._add_btn.setIcon(
+            QtWidgets.QApplication.style().standardIcon(
+                QtWidgets.QStyle.SP_FileDialogListView))
+        grid.addWidget(self._add_btn, 0, 2)
+        self._add_btn.clicked.connect(self._waveform_area.add_plots_dialog)
+
+        self._file_menu = QtWidgets.QMenu()
+        self._add_async_action("Open trace...", self.open_trace)
+        self._add_async_action("Save trace...", self.save_trace)
+        self._add_async_action("Save VCD...", self.save_vcd)
+        self._menu_btn.setMenu(self._file_menu)
+
+    def _add_async_action(self, label, coro):
+        action = QtWidgets.QAction(label, self)
+        action.triggered.connect(lambda: asyncio.ensure_future(exc_to_warning(coro())))
+        self._file_menu.addAction(action)
+
+    async def update_from_dump(self, dump):
+        async with self._decoder_lock:
+            ddb = self._state["ddb"]
+            decoded_dump = await async_decode_dump(dump)
+            trace = await async_decoded_dump_to_waveform(ddb, decoded_dump)
+            trace["dump"] = dump
+            trace["decoded_dump"] = decoded_dump
+            self._state.update(trace)
+            logger.info("Core analyzer trace updated.")
+            self.traceDataChanged.emit()
+
+    # File IO
+    async def open_trace(self):
         try:
             filename = await get_open_file_name(
-                    self.parent,
-                    "Load Raw Dump",
-                    "c://",
-                    "All files (*.*)")
+                self,
+                "Load Analyzer Trace",
+                self._current_dir,
+                "All files (*.*)")
         except asyncio.CancelledError:
             return
+        self._current_dir = os.path.dirname(filename)
         try:
             with open(filename, 'rb') as f:
                 dump = f.read()
-            self.update_from_dump(dump)
+            await self.update_from_dump(dump)
         except:
-            logger.error("Failed to parse binary trace file",
+            logger.error("Failed to open analyzer trace.",
                          exc_info=True)
 
-    async def save_trace_task(self):
+    async def save_trace(self):
+        dump = self._state["dump"]
         try:
             filename = await get_save_file_name(
-                    self.parent,
-                    "Save Raw Dump",
-                    "c://",
-                    "All files (*.*)")
+                self,
+                "Save Analyzer Trace",
+                self._current_dir,
+                "All files (*.*)")
         except asyncio.CancelledError:
             return
+        self._current_dir = os.path.dirname(filename)
         try:
             with open(filename, 'wb') as f:
-                f.write(self.dump)
+                f.write(dump)
         except:
-            logger.error("Failed to save binary trace file",
+            logger.error("Failed to save analyzer trace.",
                          exc_info=True)
-            
-    async def pull_from_device_task(self):
-        try:
-            asyncio.ensure_future(exc_to_warning(self.proxy_client.pull_from_device()))
-        except:
-            logger.error("Pull from device failed, is proxy running?", exc_info=1)
 
-    async def save_vcd_task(self):
+    async def save_vcd(self):
+        ddb = self._state["ddb"]
+        decoded_dump = self._state["decoded_dump"]
         try:
             filename = await get_save_file_name(
-                    self.parent,
-                    "Save VCD",
-                    "c://",
-                    "Value Change Dump (*.vcd)")
+                self,
+                "Save VCD",
+                self._current_dir,
+                "All files (*.*)")
         except asyncio.CancelledError:
             return
+        self._current_dir = os.path.dirname(filename)
         try:
             with open(filename, 'w') as f:
-                decoded_dump_to_vcd(f, self.ddb, self.decoded_dump)
+                await async_decoded_dump_to_vcd(f, ddb, decoded_dump)
         except:
-            logger.error("Failed to save dump to VCD", exc_info=1)
+            logger.error("Failed to save to VCD.",
+                         exc_info=True)
+        finally:
+            logger.info("Finished writing to VCD.")
 
     # Proxy subscriber callbacks
     def init_dump(self, dump):
@@ -351,180 +650,30 @@ class _TraceManager:
     def update_dump(self, mod):
         dump = mod.get("value", None)
         if dump:
-            self.update_from_dump(dump)
-   
-    # Proxy client connections
-    async def start(self, server, port):
-        # non-blocking, with loop to attach Subscriber and AsyncioClient
-        self.reconnect_task = asyncio.ensure_future(self.reconnect(), loop = self._loop)
-        try:
-            await self.subscriber.connect(server, port)
-        except:
-            logger.error("Failed to connect to master.", exc_info=1)
+            asyncio.ensure_future(self.update_from_dump(dump))
 
-    async def reconnect(self):
-        while True:
-            await self.proxy_reconnect.wait()
-            self.proxy_reconnect.clear()
-            try:
-                self.proxy_client.close_rpc()
-                await self.trace_subscriber.close()
-            except:
-                pass
-            try:
-                await self.proxy_client.connect_rpc(self.rtio_addr, self.rtio_port_control, "rtio_proxy_control")
-                await self.trace_subscriber.connect(self.rtio_addr, self.rtio_port)
-            except TimeoutError:
-                await asyncio.sleep(5)
-                self.proxy_reconnect.set()
-            except:
-                logger.error("Proxy reconnect failed, is proxy running?")
-            else:
-                logger.info(f"Proxy connected on host {self.rtio_addr}")
-
-    async def stop(self):
-        self.reconnect_task.cancel()
-        try:
-            await asyncio.wait_for(self.reconnect_task, None)
-        except asyncio.CancelledError:
-            pass
-        try:
-            await self.subscriber.close()
-            self.proxy_client.close_rpc()
-            await self.trace_subscriber.close()
-        except:
-            logger.error("Error closing proxy connections")
-    
     # DeviceDB subscriber callbacks
     def init_ddb(self, ddb):
-        self.ddb = ddb
+        setitem(self._state, "ddb", ddb)
 
     def update_ddb(self, mod):
-        devices = self.ddb
+        devices = self._state["ddb"]
+        self._state["channels"].clear()
+        self._state["channels"].extend(get_channel_list(devices))
         for name, desc in devices.items():
             if isinstance(desc, dict):
                 if desc["type"] == "controller" and name == "core_analyzer":
-                    self.rtio_addr = desc["host"]
-                    self.rtio_port = desc.get("port_proxy", 1382)
-                    self.rtio_port_control = desc.get("port_proxy_control", 1385)
-        if self.rtio_addr is not None:
-            self.proxy_reconnect.set()
-    
-    # Experiment and applet handling
-    async def ccb_pull_trace(self, channels=None):
-        try:
-            await self.proxy_client.pull_from_device()
-            await self.dump_updated.wait()
-            self.dump_updated.clear()
-            self.parent.clearActiveChannelsSignal.emit()
-            for name in channels:
-                self.parent.addActiveChannelSignal.emit(name)
-        except:
-            logger.error("Error pulling from proxy, is proxy connected?", exc_info=1)
+                    addr = desc["host"]
+                    port = desc.get("port_proxy", 1382)
+                    port_control = desc.get("port_proxy_control", 1385)
+        if addr is not None:
+            self.proxy_client.update_address(addr, port, port_control)
 
     def ccb_notify(self, message):
         try:
             service = message["service"]
-            args = message["args"]
-            kwargs = message["kwargs"]
             if service == "pull_trace_from_device":
-                asyncio.ensure_future(exc_to_warning(self.ccb_pull_trace(*args, **kwargs)))
+                asyncio.ensure_future(
+                    exc_to_warning(self.proxy_client.rpc_client.pull_from_device()))
         except:
             logger.error("failed to process CCB", exc_info=True)
-
-
-class WaveformDock(QtWidgets.QDockWidget):
-    traceDataChanged = QtCore.pyqtSignal()
-    addActiveChannelSignal = QtCore.pyqtSignal(str)
-    clearActiveChannelsSignal = QtCore.pyqtSignal()
-
-    def __init__(self, loop=None):
-        QtWidgets.QDockWidget.__init__(self, "Waveform")
-        self.setObjectName("Waveform")
-        self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
-                         QtWidgets.QDockWidget.DockWidgetFloatable)
-
-        self.trace = {"channels": set(), "logs": set(), "data": dict()}
-        self.tm = _TraceManager(self, self.trace, loop)
-
-        grid = LayoutWidget()
-        self.setWidget(grid)
-
-        self.menu_button = QtWidgets.QPushButton()
-        self.menu_button.setIcon(
-                QtWidgets.QApplication.style().standardIcon(
-                    QtWidgets.QStyle.SP_FileDialogStart))
-        grid.addWidget(self.menu_button, 0, 0)
-        
-        self.pull_button = QtWidgets.QToolButton()
-        self.pull_button.setToolTip("Pull device buffer")
-        self.pull_button.setIcon(
-                QtWidgets.QApplication.style().standardIcon(
-                    QtWidgets.QStyle.SP_BrowserReload))
-        grid.addWidget(self.pull_button, 0, 1)
-        self.pull_button.clicked.connect(
-                lambda: asyncio.ensure_future(self.tm.pull_from_device_task()))
-
-        self.waveform_widget = _WaveformWidget(self, self.trace) 
-        self.traceDataChanged.connect(self.waveform_widget.refresh_display)
-        self.addActiveChannelSignal.connect(self.waveform_widget.add_plot)
-        self.clearActiveChannelsSignal.connect(self.waveform_widget.clear_plots)
-        grid.addWidget(self.waveform_widget, 2, 0, colspan=12)
-
-        self.add_button = QtWidgets.QToolButton()
-        self.add_button.setToolTip("Add channels...")
-        self.add_button.setIcon(
-                QtWidgets.QApplication.style().standardIcon(
-                    QtWidgets.QStyle.SP_FileDialogListView))
-        grid.addWidget(self.add_button, 0, 2)
-        self.add_button.clicked.connect(self.waveform_widget.add_plots_dialog)
-        
-        self.traceDataChanged.connect(self.write_logs) 
-
-        file_menu = QtWidgets.QMenu()
-
-        open_trace_action = QtWidgets.QAction("Open trace...", self)
-        open_trace_action.triggered.connect(
-                lambda: asyncio.ensure_future(self.tm.open_trace_task()))
-        file_menu.addAction(open_trace_action)
-
-        save_trace_action = QtWidgets.QAction("Save trace...", self)
-        save_trace_action.triggered.connect(
-                lambda: asyncio.ensure_future(self.tm.save_trace_task()))
-        file_menu.addAction(save_trace_action)
-
-        open_list_action = QtWidgets.QAction("Open channel list...", self)
-        open_list_action.triggered.connect(
-                lambda: asyncio.ensure_future(self.waveform_widget.open_list_task()))
-        file_menu.addAction(open_list_action)
-
-        save_list_action = QtWidgets.QAction("Save channel list...", self)
-        save_list_action.triggered.connect(
-                lambda: asyncio.ensure_future(self.waveform_widget.save_list_task()))
-        file_menu.addAction(save_list_action)
-
-        save_vcd_action = QtWidgets.QAction("Save VCD...", self)
-        save_vcd_action.triggered.connect(
-                lambda: asyncio.ensure_future(self.tm.save_vcd_task()))
-        file_menu.addAction(save_vcd_action)
-
-        self.menu_button.setMenu(file_menu)
-
-    @staticmethod
-    def extract_logs(data):
-        out_data = []
-        for m in data:
-            log = ""
-            while m > 0:
-                log += chr(m & 0xff)
-                m >>= 8
-            out_data.append(log[::-1])
-        return out_data
-
-    def write_logs(self):
-        for log in sorted(self.trace["logs"]):
-            data = self.trace["data"][log]
-            msgs, times = zip(*data)
-            msgs = self.extract_logs(msgs)
-            for msg, time in zip(msgs, times):
-                logger.info("{}@{}: {}".format(log, time, msg))

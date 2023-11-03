@@ -8,7 +8,8 @@ from sipyco import common_args
 from artiq.master.databases import DeviceDB
 from artiq.master.worker_db import DeviceManager
 from artiq.coredevice.comm_analyzer import (get_analyzer_dump,
-                                            decode_dump, decoded_dump_to_vcd)
+                                            decode_dump, decoded_dump_to_vcd,
+                                            decoded_dump_to_waveform)
 
 
 def get_argparser():
@@ -33,6 +34,9 @@ def get_argparser():
                              "events and show RTIO event interval (in SI "
                              "seconds) and timestamp (in machine units) as "
                              "separate VCD channels")
+
+    parser.add_argument("--waveform", type=str, default=None,
+                        help="write to waveform")
     return parser
 
 
@@ -41,7 +45,7 @@ def main():
     common_args.init_logger_from_args(args)
 
     if (not args.print_decoded
-            and args.write_vcd is None and args.write_dump is None):
+            and args.write_vcd is None and args.write_dump is None and args.waveform is None):
         print("No action selected, use -p, -w and/or -d. See -h for help.")
         sys.exit(1)
 
@@ -66,6 +70,12 @@ def main():
     if args.write_dump:
         with open(args.write_dump, "wb") as f:
             f.write(dump)
+
+    if args.waveform:
+        trace = decoded_dump_to_waveform(device_mgr.get_device_db(),
+                                         decoded_dump)
+        with open(args.waveform, "w") as f:
+            f.write(trace)
 
 
 if __name__ == "__main__":
