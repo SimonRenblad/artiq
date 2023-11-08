@@ -6,6 +6,8 @@ from enum import Enum
 import struct
 import logging
 import socket
+import time
+import asyncio
 import numpy as np
 
 
@@ -62,6 +64,15 @@ StoppedMessage = namedtuple(
     "StoppedMessage", "rtio_counter")
 
 
+async def create_work_limiter(work=100, pause=5):
+    start = time.monotonic_ns()
+    while True:
+        yield
+        if time.monotonic_ns() >= start + work * 1e6:
+            await asyncio.sleep(0.001 * pause)
+            start = time.monotonic_ns()
+
+
 def decode_message(data):
     message_type_channel = struct.unpack(">I", data[28:32])[0]
     message_type = MessageType(message_type_channel & 0b11)
@@ -90,7 +101,7 @@ DecodedDump = namedtuple(
     "DecodedDump", "log_channel dds_onehot_sel messages")
 
 
-def decode_dump(data):
+def _decode_dump_prelude(data):
     # extract endian byte
     if data[0] == ord('E'):
         endian = '>'
@@ -116,10 +127,27 @@ def decode_dump(data):
     if total_byte_count > sent_bytes:
         logger.info("analyzer ring buffer has wrapped %d times",
                     total_byte_count//sent_bytes)
+    return sent_bytes, data, log_channel, dds_onehot_sel
 
+
+def decode_dump(data):
+    sent_bytes, data, log_channel, dds_onehot_sel = _decode_dump_prelude(data)
     position = 15
     messages = []
     for _ in range(sent_bytes//32):
+        messages.append(decode_message(data[position:position+32]))
+        position += 32
+    return DecodedDump(log_channel, bool(dds_onehot_sel), messages)
+
+
+# slower decoder with delay to allow gui updates
+async def async_decode_dump(data, work_period=95, wait_period=5):
+    sent_bytes, data, log_channel, dds_onehot_sel = _decode_dump_prelude(data)
+    work_limiter = create_work_limiter(work_period, wait_period)
+    position = 15
+    messages = []
+    for _ in range(sent_bytes//32):
+        await anext(work_limiter)
         messages.append(decode_message(data[position:position+32]))
         position += 32
     return DecodedDump(log_channel, bool(dds_onehot_sel), messages)
@@ -151,6 +179,12 @@ class VCDChannel:
         integer_cast = struct.unpack(">Q", struct.pack(">d", x))[0]
         self.set_value("{:064b}".format(integer_cast))
 
+    def set_log(self, log_message):
+        value = ""
+        for c in log_message:
+            value += "{:08b}".format(ord(c))
+        self.set_value(value)
+
 
 class VCDManager:
     def __init__(self, fileobj):
@@ -161,16 +195,16 @@ class VCDManager:
     def set_timescale_ps(self, timescale):
         self.out.write("$timescale {}ps $end\n".format(round(timescale)))
 
-    def get_channel(self, name, width, is_log=False):
-        if is_log:
-            name = "log/" + name
+    def get_channel(self, name, width, prefix="", suffix=""):
+        name = prefix + name + suffix
         code = next(self.codes)
         self.out.write("$var wire {width} {code} {name} $end\n"
                        .format(name=name, code=code, width=width))
         return VCDChannel(self.out, code)
 
     @contextmanager
-    def scope(self, scope, name):
+    def scope(self, scope, name, prefix="", suffix=""):
+        name = prefix + name + suffix
         self.out.write("$scope module {}/{} $end\n".format(scope, name))
         yield
         self.out.write("$upscope $end\n")
@@ -191,52 +225,74 @@ class WaveformChannel:
             value = np.nan
         else:
             value = int(value, 2)
-        self.data.append((value, self.current_time))
+        self.data.append((self.current_time, value))
 
     def set_value_double(self, x):
-        self.data.append((x, self.current_time))
+        self.data.append((self.current_time, x))
 
     def set_time(self, time):
         self.current_time = time
+
+    def set_log(self, log_message):
+        self.data.append((self.current_time, log_message))
 
 
 class WaveformManager:
     DEFAULT_SCOPE = "<default>"
 
-    def __init__(self, trace):
+    def __init__(self):
         self.current_time = 0
-        self.timescale = None
         self.channels = list()
-        self.trace = trace
+        self.trace = {"timescale": None, "logs": dict(), "data": dict()}
         self.current_scope = WaveformManager.DEFAULT_SCOPE
 
     def set_timescale_ps(self, timescale):
-        self.timescale = timescale * 1e-9
+        self.trace["timescale"] = timescale
 
-    def get_channel(self, name, width, is_log=False):
+    def get_channel(self, name, width, prefix="", suffix="", is_log=False):
         if is_log:
             data = self.trace["logs"][name] = list()
         else:
-            data = self.trace["data"].setdefault(self.current_scope, dict())[name] = list()
+            name = prefix + name + suffix
+            data = self.trace["data"].setdefault(self.current_scope, dict())[name] = [(0, 0)]
         channel = WaveformChannel(data, self.current_time)
         self.channels.append(channel)
         return channel
 
     @contextmanager
-    def scope(self, scope, name):
+    def scope(self, scope, name, prefix="", suffix=""):
+        old_scope = self.current_scope
         self.current_scope = scope
         yield
-        self.current_scope = WaveformManager.DEFAULT_SCOPE
+        self.current_scope = old_scope
 
     def set_time(self, time):
         for channel in self.channels:
-            channel.set_time(time)
+            channel.set_time(time * 1e-12 * self.trace["timescale"])
+
+
+class DummyManager:
+    def __init__(self):
+        self.current_scope = WaveformManager.DEFAULT_SCOPE
+        self.channels = list()
+
+    def get_channel(self, name, width, prefix="", suffix="", is_log=False):
+        long_name = prefix + name + suffix
+        self.channels.append((self.current_scope, long_name, name))
+        return None
+
+    @contextmanager
+    def scope(self, scope, name, prefix="", suffix=""):
+        old_scope = self.current_scope
+        self.current_scope = scope
+        yield
+        self.current_scope = old_scope
 
 
 class TTLHandler:
     def __init__(self, manager, name):
         self.name = name
-        self.channel_value = manager.get_channel("ttl/" + name, 1)
+        self.channel_value = manager.get_channel(name, 1, prefix="ttl/")
         self.last_value = "X"
         self.oe = True
 
@@ -265,7 +321,7 @@ class TTLClockGenHandler:
         self.name = name
         self.ref_period = ref_period
         self.channel_frequency = manager.get_channel(
-            "ttl_clkgen/" + name, 64)
+            name, 64, prefix="ttl_clkgen/")
 
     def process_message(self, message):
         if isinstance(message, OutputMessage):
@@ -288,9 +344,9 @@ class DDSHandler:
         dds_channel = dict()
         with self.manager.scope("dds", name):
             dds_channel["vcd_frequency"] = \
-                self.manager.get_channel(name + "/frequency", 64)
+                self.manager.get_channel(name, 64, suffix="/frequency")
             dds_channel["vcd_phase"] = \
-                self.manager.get_channel(name + "/phase", 64)
+                self.manager.get_channel(name, 64, suffix="/phase")
         dds_channel["ftw"] = [None, None]
         dds_channel["pow"] = None
         self.dds_channels[dds_channel_nr] = dds_channel
@@ -343,7 +399,7 @@ class WishboneHandler:
     def __init__(self, manager, name, read_bit):
         self._reads = []
         self._read_bit = read_bit
-        self.stb = manager.get_channel("{}/{}".format(name, "stb"), 1)
+        self.stb = manager.get_channel(name, 1, suffix="/stb")
 
     def process_message(self, message):
         self.stb.set_value("1")
@@ -383,7 +439,7 @@ class SPIMasterHandler(WishboneHandler):
                     ("write_length", 8), ("read_length", 8),
                     ("write", 32), ("read", 32)]:
                 self.channels[reg_name] = manager.get_channel(
-                        "{}/{}".format(name, reg_name), reg_width)
+                        name, reg_width, suffix="/" + reg_name)
 
     def process_write(self, address, data):
         if address == 0:
@@ -413,7 +469,7 @@ class SPIMaster2Handler(WishboneHandler):
         self.channels = {}
         self.scope = "spi2"
         with manager.scope("spi2", name):
-            self.stb = manager.get_channel("{}/{}".format(name, "stb"), 1)
+            self.stb = manager.get_channel(name, 1, suffix="/stb")
             for reg_name, reg_width in [
                     ("flags", 8),
                     ("length", 5),
@@ -422,7 +478,7 @@ class SPIMaster2Handler(WishboneHandler):
                     ("write", 32),
                     ("read", 32)]:
                 self.channels[reg_name] = manager.get_channel(
-                        "{}/{}".format(name, reg_name), reg_width)
+                    name, reg_width, suffix="/" + reg_name)
 
     def process_message(self, message):
         self.stb.set_value("1")
@@ -474,8 +530,9 @@ class LogHandler:
         self.channels = dict()
         for name, maxlength in log_channels.items():
             self.channels[name] = manager.get_channel(name,
-                                                              maxlength*8,
-                                                              True)
+                                                      maxlength * 8,
+                                                      suffix="/logs",
+                                                      is_log=True)
         self.current_entry = ""
 
     def process_message(self, message):
@@ -483,10 +540,7 @@ class LogHandler:
             self.current_entry += _extract_log_chars(message.data)
             if len(self.current_entry) > 1 and self.current_entry[-1] == "\x1D":
                 channel_name, log_message = self.current_entry[:-1].split("\x1E", maxsplit=1)
-                value = ""
-                for c in log_message:
-                    value += "{:08b}".format(ord(c))
-                self.channels[channel_name].set_value(value)
+                self.channels[channel_name].set_log(log_message)
                 self.current_entry = ""
 
 
@@ -573,12 +627,42 @@ def decoded_dump_to_vcd(fileobj, devices, dump, uniform_interval=False):
     _decoded_dump_to_target(vcd_manager, devices, dump, uniform_interval)
 
 
-def decoded_dump_to_waveform(trace, devices, dump, uniform_interval=False):
-    manager = WaveformManager(trace)
+def decoded_dump_to_waveform(devices, dump, uniform_interval=False):
+    manager = WaveformManager()
     _decoded_dump_to_target(manager, devices, dump, uniform_interval)
+    return manager.trace
 
 
-def _decoded_dump_to_target(manager, devices, dump, uniform_interval):
+async def async_decoded_dump_to_vcd(fileobj, devices, dump, uniform_interval=False,
+                                    work_period=95, wait_period=5):
+    vcd_manager = VCDManager(fileobj)
+    await _async_decoded_dump_to_target(vcd_manager, devices, dump, uniform_interval,
+                                        work_period, wait_period)
+
+
+async def async_decoded_dump_to_waveform(devices, dump, uniform_interval=False,
+                                         work_period=95, wait_period=5):
+    manager = WaveformManager()
+    await _async_decoded_dump_to_target(manager, devices, dump, uniform_interval,
+                                        work_period, wait_period)
+    return manager.trace
+
+
+def get_channel_list(devices):
+    manager = DummyManager()
+    create_channel_handlers(manager, devices, 1e-9, 3e9, False)
+    manager.get_channel("timestamp", 64)
+    manager.get_channel("interval", 6)
+    manager.get_channel("rtio_slack", 64)
+    return manager.channels
+
+
+PreludeArgs = namedtuple("PreludeArgs",
+                         "manager channel_handlers messages start_time \
+                         ref_period slack interval timestamp")
+
+
+def _decoded_dump_to_target_prelude(manager, devices, dump, uniform_interval):
     ref_period = get_ref_period(devices)
 
     if ref_period is not None:
@@ -605,6 +689,8 @@ def _decoded_dump_to_target(manager, devices, dump, uniform_interval):
     log_channels = get_log_channels(dump.log_channel, messages)
     channel_handlers[dump.log_channel] = LogHandler(
         manager, log_channels)
+    interval = None
+    timestamp = None
     if uniform_interval:
         # RTIO event timestamp in machine units
         timestamp = manager.get_channel("timestamp", 64)
@@ -620,19 +706,49 @@ def _decoded_dump_to_target(manager, devices, dump, uniform_interval):
         if start_time:
             break
 
+    return PreludeArgs(manager, channel_handlers, messages,
+                       start_time, ref_period, slack, interval, timestamp)
+
+
+def _decoded_dump_to_target(manager, devices, dump, uniform_interval):
+    args = _decoded_dump_to_target_prelude(manager, devices, dump, uniform_interval)
     t0 = 0
-    for i, message in enumerate(messages):
-        if message.channel in channel_handlers:
-            t = get_message_time(message) - start_time
+    for i, message in enumerate(args.messages):
+        if message.channel in args.channel_handlers:
+            t = get_message_time(message) - args.start_time
             if t >= 0:
                 if uniform_interval:
-                    interval.set_value_double((t - t0)*ref_period)
-                    manager.set_time(i)
-                    timestamp.set_value("{:064b}".format(t))
+                    args.interval.set_value_double((t - t0)*args.ref_period)
+                    args.manager.set_time(i)
+                    args.timestamp.set_value("{:064b}".format(t))
                     t0 = t
                 else:
-                    manager.set_time(t)
-            channel_handlers[message.channel].process_message(message)
+                    args.manager.set_time(t)
+            args.channel_handlers[message.channel].process_message(message)
             if isinstance(message, OutputMessage):
-                slack.set_value_double(
-                    (message.timestamp - message.rtio_counter)*ref_period)
+                args.slack.set_value_double(
+                    (message.timestamp - message.rtio_counter)*args.ref_period)
+
+
+# rate limited to prevent event loop lag, total conversion time will be longer...
+async def _async_decoded_dump_to_target(manager, devices, dump, uniform_interval,
+                                        work_period, wait_period):
+    args = _decoded_dump_to_target_prelude(manager, devices, dump, uniform_interval)
+    work_limiter = create_work_limiter(work_period, wait_period)
+    t0 = 0
+    for i, message in enumerate(args.messages):
+        await anext(work_limiter)
+        if message.channel in args.channel_handlers:
+            t = get_message_time(message) - args.start_time
+            if t >= 0:
+                if uniform_interval:
+                    args.interval.set_value_double((t - t0)*args.ref_period)
+                    args.manager.set_time(i)
+                    args.timestamp.set_value("{:064b}".format(t))
+                    t0 = t
+                else:
+                    args.manager.set_time(t)
+            args.channel_handlers[message.channel].process_message(message)
+            if isinstance(message, OutputMessage):
+                args.slack.set_value_double(
+                    (message.timestamp - message.rtio_counter)*args.ref_period)
