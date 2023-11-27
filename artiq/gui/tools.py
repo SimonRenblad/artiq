@@ -68,6 +68,7 @@ async def get_open_file_name(parent, caption, dir, filter):
     dialog.open()
     return await fut
 
+
 async def get_save_file_name(parent, caption, dir, filter, suffix=None):
     """like QtWidgets.QFileDialog.getSaveFileName(), but a coroutine"""
     dialog = QtWidgets.QFileDialog(parent, caption, dir, filter)
