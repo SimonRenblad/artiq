@@ -238,13 +238,11 @@ class WaveformChannel:
 
 
 class WaveformManager:
-    DEFAULT_SCOPE = "<default>"
 
     def __init__(self):
         self.current_time = 0
         self.channels = list()
         self.trace = {"timescale": None, "logs": dict(), "data": dict()}
-        self.current_scope = WaveformManager.DEFAULT_SCOPE
 
     def set_timescale_ps(self, timescale):
         self.trace["timescale"] = timescale
@@ -253,32 +251,31 @@ class WaveformManager:
         if is_log:
             data = self.trace["logs"][name] = list()
         else:
-            name = prefix + name + suffix
-            data = self.trace["data"].setdefault(self.current_scope, dict())[name] = [(0, 0)]
+            long_name = prefix + name + suffix
+            data = self.trace["data"][long_name] = list()
         channel = WaveformChannel(data, self.current_time)
         self.channels.append(channel)
         return channel
 
     @contextmanager
     def scope(self, scope, name, prefix="", suffix=""):
-        old_scope = self.current_scope
-        self.current_scope = scope
         yield
-        self.current_scope = old_scope
 
     def set_time(self, time):
         for channel in self.channels:
             channel.set_time(time * 1e-12 * self.trace["timescale"])
 
 
-class DummyManager:
+class ChannelsOnlyManager:
+    DEFAULT_SCOPE = "<default>"
+
     def __init__(self):
-        self.current_scope = WaveformManager.DEFAULT_SCOPE
+        self.current_scope = ChannelsOnlyManager.DEFAULT_SCOPE
         self.channels = list()
 
     def get_channel(self, name, width, prefix="", suffix="", is_log=False):
         long_name = prefix + name + suffix
-        self.channels.append((self.current_scope, long_name, name))
+        self.channels.append((self.current_scope, long_name, name, width))
         return None
 
     @contextmanager
@@ -649,7 +646,7 @@ async def async_decoded_dump_to_waveform(devices, dump, uniform_interval=False,
 
 
 def get_channel_list(devices):
-    manager = DummyManager()
+    manager = ChannelsOnlyManager()
     create_channel_handlers(manager, devices, 1e-9, 3e9, False)
     manager.get_channel("timestamp", 64)
     manager.get_channel("interval", 6)
