@@ -13,6 +13,7 @@ from artiq.coredevice.comm_analyzer import (async_decoded_dump_to_vcd, get_chann
 import os
 import numpy as np
 from operator import setitem
+from enum import Enum
 import pyqtgraph as pg
 import asyncio
 import logging
@@ -37,7 +38,7 @@ class _AddChannelDialog(QtWidgets.QDialog):
         grid.addWidget(self._channels_widget, 0, 0, 1, 2)
 
         groups = dict()
-        for scope, channel, _ in self.channels:
+        for scope, channel, _, _ in self.channels:
             if scope not in groups:
                 group = QtWidgets.QTreeWidgetItem([scope])
                 group.setFlags(group.flags() & ~QtCore.Qt.ItemIsSelectable)
@@ -68,6 +69,30 @@ class _AddChannelDialog(QtWidgets.QDialog):
         self.close()
 
 
+DataFormat = Enum("DataFormat", ["INT", "HEX", "BIN", "REAL"])
+
+
+def get_format_waveform_value(val, bit_width, data_format):
+    lbl = str(val)
+    hex_width = (bit_width - 1) // 4 + 1
+    if val is not None:
+        v = int(val)
+        if data_format == DataFormat.INT:
+            lbl = "{:d}".format(v)
+        if data_format == DataFormat.HEX:
+            lbl = "{v:0{w}X}".format(v=v, w=hex_width)
+        elif data_format == DataFormat.BIN:
+            lbl = "{v:0{w}b}".format(v=v, w=bit_width)
+    else:
+        if data_format == DataFormat.HEX:
+            lbl = "X" * hex_width
+        elif data_format == DataFormat.BIN:
+            lbl = "x" * bit_width
+        else:
+            lbl = "nan"
+    return lbl
+
+
 class Waveform(pg.PlotWidget):
     MIN_HEIGHT = 100
     MAX_HEIGHT = 200
@@ -84,6 +109,7 @@ class Waveform(pg.PlotWidget):
         self._scope = channel[0]
         self._name = channel[1]
         self._ddb_name = channel[2]
+        self._width = channel[3]
 
         self._state = state
         self._logs = list()
@@ -98,7 +124,6 @@ class Waveform(pg.PlotWidget):
         self._pi.hideButtons()
         self._pi.getAxis("bottom").setStyle(showValues=False, tickLength=0)
         self._pi.hideAxis("top")
-        self._pi.setLabel("left", "/".join(channel[0:2]))
 
         self._pdi = self._pi.listDataItems()[0]
         pdi_opts = {
@@ -119,11 +144,17 @@ class Waveform(pg.PlotWidget):
         self._vb.enableAutoRange(axis=pg.ViewBox.YAxis, enable=False)
 
         self._left_ax = self._pi.getAxis("left")
+        self._left_ax.setLabel(self._name)
+        self._left_ax.label.setToolTip(self._name)
+        self._left_ax.enableAutoSIPrefix(enable=False)
         self._left_ax.setWidth(120)
 
         self._cursor = pg.InfiniteLine()
         self._cursor_label = pg.InfLineLabel(self._cursor, text='0')
+        self._cursor_y = None
         self.addItem(self._cursor)
+
+        self._data_format = DataFormat.REAL
 
         self.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
         self._set_digital(True)
@@ -146,7 +177,7 @@ class Waveform(pg.PlotWidget):
     def on_load_data(self):
         data = self._state["data"]
         try:
-            d = np.array(data[self._scope][self._name])
+            d = np.array(data[self._name])
             data_range = (np.min(d[:, 1]), np.max(d[:, 1]))
             self._set_data_range(data_range)
             self._pdi.setData(d)
@@ -195,18 +226,36 @@ class Waveform(pg.PlotWidget):
             self._pdi.setSymbol(self._symbol)
             self._is_show_markers = True
 
+    def _refresh_cursor_label(self):
+        lbl = get_format_waveform_value(self._cursor_y, self._width, self._data_format)
+        self._cursor_label.setText(lbl)
+
     def on_cursor_moved(self, x):
         self._cursor.setValue(x)
         ind = np.searchsorted(self._pdi.xData, x, side="left") - 1
         dr = self._pdi.dataRect()
         if dr is not None and dr.left() <= x <= dr.right() \
                 and 0 <= ind < len(self._pdi.yData):
-            val = self._pdi.yData[ind]
-            if self._is_digital:
-                val = int(val)
-            self._cursor_label.setText(str(val))
+            self._cursor_y = self._pdi.yData[ind]
         else:
-            self._cursor_label.setText("x")
+            self._cursor_y = None
+        self._refresh_cursor_label()
+
+    def on_set_int(self):
+        self._data_format = DataFormat.INT
+        self._refresh_cursor_label()
+
+    def on_set_real(self):
+        self._data_format = DataFormat.REAL
+        self._refresh_cursor_label()
+
+    def on_set_hex(self):
+        self._data_format = DataFormat.HEX
+        self._refresh_cursor_label()
+
+    def on_set_bin(self):
+        self._data_format = DataFormat.BIN
+        self._refresh_cursor_label()
 
     # override
     def mouseMoveEvent(self, e):
@@ -266,6 +315,7 @@ class WaveformArea(QtWidgets.QWidget):
         scroll_area.setFrameShape(QtWidgets.QFrame.NoFrame)
 
         self._waveform_area = DragDropSplitter(parent=scroll_area)
+        self._waveform_area.setHandleWidth(1)
         scroll_area.setWidget(self._waveform_area)
 
         layout.addWidget(scroll_area)
@@ -281,6 +331,23 @@ class WaveformArea(QtWidgets.QWidget):
         action.setCheckable(True)
         action.setChecked(False)
         action.triggered.connect(waveform.on_toggle_markers)
+        waveform.addAction(action)
+
+        action = QtWidgets.QAction("Data Format", waveform)
+        menu = QtWidgets.QMenu(waveform)
+        a1 = QtWidgets.QAction("Int", menu)
+        a1.triggered.connect(waveform.on_set_int)
+        a2 = QtWidgets.QAction("Real", menu)
+        a2.triggered.connect(waveform.on_set_real)
+        a3 = QtWidgets.QAction("Hex", menu)
+        a3.triggered.connect(waveform.on_set_hex)
+        a4 = QtWidgets.QAction("Bin", menu)
+        a4.triggered.connect(waveform.on_set_bin)
+        menu.addAction(a1)
+        menu.addAction(a2)
+        menu.addAction(a3)
+        menu.addAction(a4)
+        action.setMenu(menu)
         waveform.addAction(action)
 
         action = QtWidgets.QAction(waveform)
@@ -345,13 +412,12 @@ class WaveformArea(QtWidgets.QWidget):
         data = self._state["data"]
         logs = self._state["logs"]
         maximum = 0
-        for scopes in data.values():
-            for d in scopes.values():
-                if d is None or len(d) == 0:
-                    continue
-                temp = d[-1][0]
-                if maximum < temp:
-                    maximum = temp
+        for d in data.values():
+            if d is None or len(d) == 0:
+                continue
+            temp = d[-1][0]
+            if maximum < temp:
+                maximum = temp
         for d in logs.values():
             if d is None or len(d) == 0:
                 continue
@@ -472,6 +538,7 @@ class WaveformProxyClient:
 
 class _CursorTimeControl(QtWidgets.QLineEdit):
     submit = QtCore.pyqtSignal(float)
+    PRECISION = 10
 
     def __init__(self, parent):
         QtWidgets.QLineEdit.__init__(self, parent=parent)
@@ -487,7 +554,7 @@ class _CursorTimeControl(QtWidgets.QLineEdit):
             pass
 
     def _val_to_text(self, val):
-        self.setText(pg.siFormat(val, suffix="s", allowUnicode=False))
+        self.setText(pg.siFormat(val, suffix="s", allowUnicode=False, precision=self.PRECISION))
 
     def _on_submit(self):
         self.submit.emit(self._value)
@@ -658,6 +725,7 @@ class WaveformDock(QtWidgets.QDockWidget):
 
     def update_ddb(self, mod):
         devices = self._state["ddb"]
+        addr = None
         self._state["channels"].clear()
         self._state["channels"].extend(get_channel_list(devices))
         for name, desc in devices.items():
