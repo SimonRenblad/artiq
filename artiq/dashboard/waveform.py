@@ -735,11 +735,3 @@ class WaveformDock(QtWidgets.QDockWidget):
                     port_control = desc.get("port_proxy_control", 1385)
         if addr is not None:
             self.proxy_client.update_address(addr, port, port_control)
-
-    def ccb_notify(self, message):
-        try:
-            service = message["service"]
-            if service == "pull_trace_from_device":
-                asyncio.ensure_future(self.proxy_client.pull_from_device_task())
-        except:
-            logger.error("failed to process CCB", exc_info=True)
