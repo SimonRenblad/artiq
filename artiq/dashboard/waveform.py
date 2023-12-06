@@ -26,24 +26,19 @@ DataFormat = Enum("DataFormat", ["INT", "HEX", "BIN", "REAL"])
 
 
 def get_format_waveform_value(val, bit_width, data_format):
-    lbl = str(val)
+    if val is None:
+        return ""
+    if data_format == DataFormat.REAL:
+        return "{:f}".format(val)
+    val = int(val)
+    if data_format == DataFormat.INT:
+        return "{:d}".format(val)
     hex_width = (bit_width - 1) // 4 + 1
-    if val is not None:
-        v = int(val)
-        if data_format == DataFormat.INT:
-            lbl = "{:d}".format(v)
-        if data_format == DataFormat.HEX:
-            lbl = "{v:0{w}X}".format(v=v, w=hex_width)
-        elif data_format == DataFormat.BIN:
-            lbl = "{v:0{w}b}".format(v=v, w=bit_width)
-    else:
-        if data_format == DataFormat.HEX:
-            lbl = "X" * hex_width
-        elif data_format == DataFormat.BIN:
-            lbl = "x" * bit_width
-        else:
-            lbl = "nan"
-    return lbl
+    if data_format == DataFormat.HEX:
+        return "{v:0{w}X}".format(v=val, w=hex_width)
+    if data_format == DataFormat.BIN:
+        return "{v:0{w}b}".format(v=val, w=bit_width)
+    return str(val)  # unreachable
 
 
 class _AddChannelDialog(QtWidgets.QDialog):
@@ -95,9 +90,9 @@ class _AddChannelDialog(QtWidgets.QDialog):
 
 
 class Waveform(pg.PlotWidget):
-    MIN_HEIGHT = 100
+    MIN_HEIGHT = 50
     MAX_HEIGHT = 200
-    PREF_HEIGHT = 150
+    PREF_HEIGHT = 100
 
     cursorMoved = QtCore.pyqtSignal(float)
 
@@ -142,49 +137,40 @@ class Waveform(pg.PlotWidget):
 
         self._vb = self._pi.getViewBox()
         self._vb.setMouseEnabled(x=True, y=False)
-        self._vb.enableAutoRange(axis=pg.ViewBox.YAxis, enable=False)
+        self._vb.disableAutoRange(axis=pg.ViewBox.YAxis)
+        self._vb.setLimits(xMin=0)
 
         self._left_ax = self._pi.getAxis("left")
-        self._left_ax.setLabel(self._name)
-        self._left_ax.label.setToolTip(self._name)
         self._left_ax.enableAutoSIPrefix(enable=False)
-        self._left_ax.setWidth(120)
+        self._left_ax.setWidth(20)
+        if self._width == 1:
+            self._pi.setRange(yRange=(0, 1), padding=0.1)
+            self._left_ax.setTicks([[(0, "0"), (1, "1")], []])
+            self._data_format = DataFormat.INT
+            self._vb.setLimits(yMin=0, yMax=1)
+        else:
+            self._data_format = DataFormat.REAL
+
+        self._legend = self.addLegend(offset=(1, 1))
+        self._legend.addItem(self._pdi, self._name)
 
         self._cursor = pg.InfiniteLine()
         self._cursor_label = pg.InfLineLabel(self._cursor, text='0')
         self._cursor_y = None
         self.addItem(self._cursor)
 
-        self._data_format = DataFormat.REAL
-
         self.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
-        self._set_digital(True)
-
-    def _set_digital(self, digital):
-        if digital:
-            self._left_ax.setTicks([[(0, "0"), (1, "1")], []])
-        else:
-            self._left_ax.setTicks(None)
-        self._is_digital = digital
-
-    def _set_data_range(self, data_range):
-        if data_range in [(0, 1), (0, 0)]:
-            self._set_digital(True)
-            self._pi.setRange(yRange=(0, 1), padding=0.1)
-        else:
-            self._set_digital(False)
-            self._pi.setRange(yRange=data_range, padding=0.1)
 
     def on_load_data(self):
         data = self._state["data"]
         try:
             d = np.array(data[self._name])
             data_range = (np.min(d[:, 1]), np.max(d[:, 1]))
-            self._set_data_range(data_range)
+            if self._width != 1:
+                self._vb.setRange(yRange=data_range)
             self._pdi.setData(d)
         except Exception as e:
-            logger.debug("Unable to load data for {}/{}: {}", self._scope, self._name, e)
-            self._set_data_range((0, 0))
+            logger.debug("Unable to load data for %s/%s: %s", self._scope, self._name, e)
             self._pdi.setData(x=np.zeros(1), y=np.zeros(1))
 
     def on_load_logs(self):
@@ -228,8 +214,12 @@ class Waveform(pg.PlotWidget):
             self._is_show_markers = True
 
     def _refresh_cursor_label(self):
-        lbl = get_format_waveform_value(self._cursor_y, self._width, self._data_format)
-        self._cursor_label.setText(lbl)
+        try:
+            lbl = get_format_waveform_value(self._cursor_y, self._width, self._data_format)
+            self._cursor_label.setText(lbl)
+        except Exception as e:
+            logger.debug(e)
+            self._cursor_label.setText("err")
 
     def on_cursor_moved(self, x):
         self._cursor.setValue(x)
@@ -302,7 +292,7 @@ class WaveformArea(QtWidgets.QWidget):
         left = pg.AxisItem("left")
         left.setStyle(textFillLimits=(0, 0))
         left.setFixedHeight(0)
-        left.setWidth(120)
+        left.setWidth(20)
         self._ref_axis.setAxisItems({"top": top, "left": left})
 
         self._ref_vb = self._ref_axis.getPlotItem().getViewBox()
@@ -437,6 +427,7 @@ class WaveformArea(QtWidgets.QWidget):
             cw = self._waveform_area.widget(i)
             cw.on_load_data()
             cw.on_load_logs()
+            cw.on_cursor_moved(self._cursor_x_pos)
         self._update_xrange()
 
     def on_cursor_moved(self, x):
