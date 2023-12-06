@@ -17,8 +17,33 @@ from enum import Enum
 import pyqtgraph as pg
 import asyncio
 import logging
+import time
 
 logger = logging.getLogger(__name__)
+
+
+DataFormat = Enum("DataFormat", ["INT", "HEX", "BIN", "REAL"])
+
+
+def get_format_waveform_value(val, bit_width, data_format):
+    lbl = str(val)
+    hex_width = (bit_width - 1) // 4 + 1
+    if val is not None:
+        v = int(val)
+        if data_format == DataFormat.INT:
+            lbl = "{:d}".format(v)
+        if data_format == DataFormat.HEX:
+            lbl = "{v:0{w}X}".format(v=v, w=hex_width)
+        elif data_format == DataFormat.BIN:
+            lbl = "{v:0{w}b}".format(v=v, w=bit_width)
+    else:
+        if data_format == DataFormat.HEX:
+            lbl = "X" * hex_width
+        elif data_format == DataFormat.BIN:
+            lbl = "x" * bit_width
+        else:
+            lbl = "nan"
+    return lbl
 
 
 class _AddChannelDialog(QtWidgets.QDialog):
@@ -67,30 +92,6 @@ class _AddChannelDialog(QtWidgets.QDialog):
                              if channel[0:2] in items]
         self.accepted.emit(selected_channels)
         self.close()
-
-
-DataFormat = Enum("DataFormat", ["INT", "HEX", "BIN", "REAL"])
-
-
-def get_format_waveform_value(val, bit_width, data_format):
-    lbl = str(val)
-    hex_width = (bit_width - 1) // 4 + 1
-    if val is not None:
-        v = int(val)
-        if data_format == DataFormat.INT:
-            lbl = "{:d}".format(v)
-        if data_format == DataFormat.HEX:
-            lbl = "{v:0{w}X}".format(v=v, w=hex_width)
-        elif data_format == DataFormat.BIN:
-            lbl = "{v:0{w}b}".format(v=v, w=bit_width)
-    else:
-        if data_format == DataFormat.HEX:
-            lbl = "X" * hex_width
-        elif data_format == DataFormat.BIN:
-            lbl = "x" * bit_width
-        else:
-            lbl = "nan"
-    return lbl
 
 
 class Waveform(pg.PlotWidget):
@@ -181,8 +182,8 @@ class Waveform(pg.PlotWidget):
             data_range = (np.min(d[:, 1]), np.max(d[:, 1]))
             self._set_data_range(data_range)
             self._pdi.setData(d)
-        except:
-            logger.debug("Unable to load data for {}/{}".format(self._scope, self._name))
+        except Exception as e:
+            logger.debug("Unable to load data for {}/{}: {}", self._scope, self._name, e)
             self._set_data_range((0, 0))
             self._pdi.setData(x=np.zeros(1), y=np.zeros(1))
 
@@ -469,7 +470,12 @@ class WaveformProxyClient:
         self._reconnect_sub_task = None
 
     async def pull_from_device_task(self):
-        asyncio.ensure_future(exc_to_warning(self.rpc_client.pull_from_device()))
+        try:
+            if self.rpc_client.get_rpc_id()[0] is None:
+                raise AttributeError("Unable to identify RPC target. Is analyzer proxy connected?")
+            asyncio.ensure_future(exc_to_warning(self.rpc_client.pull_from_device()))
+        except Exception as e:
+            logger.warning("Failed to pull from device: %s", e)
 
     def update_address(self, addr, port, port_control):
         self._proxy_addr = addr
@@ -480,29 +486,31 @@ class WaveformProxyClient:
 
     # Proxy client connections
     async def start(self, server, port):
-        self._reconnect_rpc_task = asyncio.ensure_future(self.reconnect_rpc(), loop=self._loop)
-        self._reconnect_sub_task = asyncio.ensure_future(self.reconnect_sub(), loop=self._loop)
         try:
             await self.devices_sub.connect(server, port)
-        except:
-            logger.error("Failed to connect to master.", exc_info=True)
+            self._reconnect_rpc_task = asyncio.ensure_future(
+                self.reconnect_rpc(), loop=self._loop)
+            self._reconnect_sub_task = asyncio.ensure_future(
+                self.reconnect_sub(), loop=self._loop)
+        except Exception as e:
+            logger.error("Failed to connect to master: %s", e)
 
     async def reconnect_rpc(self):
         try:
             while True:
                 await self._on_rpc_reconnect.wait()
                 self._on_rpc_reconnect.clear()
-                logger.info("Attempting coreanalyzer RPC connection...")
+                logger.info("Attempting analyzer proxy RPC connection...")
                 try:
                     await self.rpc_client.connect_rpc(self._proxy_addr,
                                                       self._proxy_port_ctl,
                                                       "coreanalyzer_proxy_control")
-                except:
-                    logger.info("coreanalyzer RPC timed out, trying again...")
+                except Exception:
+                    logger.info("Analyzer proxy RPC timed out, trying again...")
                     await asyncio.sleep(5)
                     self._on_rpc_reconnect.set()
                 else:
-                    logger.info("Connected RPC to core analyzer proxy.")
+                    logger.info("RPC connected to core analyzer proxy.")
         except asyncio.CancelledError:
             pass
 
@@ -511,29 +519,29 @@ class WaveformProxyClient:
             while True:
                 await self._on_sub_reconnect.wait()
                 self._on_sub_reconnect.clear()
-                logger.info("Attempting coreanalyzer subscriber connection...")
+                logger.info("Attempting to subscribe to analyzer proxy...")
                 try:
                     await self.proxy_sub.connect(self._proxy_addr, self._proxy_port)
-                except:
-                    logger.info("coreanalyzer subscriber timed out, trying again...")
+                except Exception:
+                    logger.info("Analyzer proxy subscribe timed out, trying again...")
                     await asyncio.sleep(5)
                     self._on_sub_reconnect.set()
                 else:
-                    logger.info("Connected subscriber to core analyzer proxy.")
+                    logger.info("Subscribed to core analyzer proxy.")
         except asyncio.CancelledError:
             pass
 
     async def stop(self):
-        self._reconnect_rpc_task.cancel()
-        self._reconnect_sub_task.cancel()
-        await asyncio.wait_for(self._reconnect_rpc_task, None)
-        await asyncio.wait_for(self._reconnect_sub_task, None)
         try:
+            self._reconnect_rpc_task.cancel()
+            self._reconnect_sub_task.cancel()
+            await asyncio.wait_for(self._reconnect_rpc_task, None)
+            await asyncio.wait_for(self._reconnect_sub_task, None)
             await self.devices_sub.close()
             self.rpc_client.close_rpc()
             await self.proxy_sub.close()
-        except:
-            logger.error("Error occurred while closing proxy connections.", exc_info=1)
+        except Exception as e:
+            logger.error("Error occurred while closing proxy connections: %s", e)
 
 
 class _CursorTimeControl(QtWidgets.QLineEdit):
@@ -550,7 +558,7 @@ class _CursorTimeControl(QtWidgets.QLineEdit):
     def _text_to_val(self, text):
         try:
             self._value = pg.siEval(text)
-        except:
+        except Exception:
             pass
 
     def _val_to_text(self, val):
@@ -643,13 +651,16 @@ class WaveformDock(QtWidgets.QDockWidget):
 
     async def update_from_dump(self, dump):
         async with self._decoder_lock:
+            start = time.monotonic()
             ddb = self._state["ddb"]
             decoded_dump = await async_decode_dump(dump)
             trace = await async_decoded_dump_to_waveform(ddb, decoded_dump)
             trace["dump"] = dump
             trace["decoded_dump"] = decoded_dump
             self._state.update(trace)
-            logger.info("Core analyzer trace updated.")
+            end = time.monotonic()
+            time_taken = (end - start) * 1000
+            logger.info("Core analyzer trace updated in %.2f ms.", time_taken)
             self.traceDataChanged.emit()
 
     # File IO
@@ -667,9 +678,8 @@ class WaveformDock(QtWidgets.QDockWidget):
             with open(filename, 'rb') as f:
                 dump = f.read()
             await self.update_from_dump(dump)
-        except:
-            logger.error("Failed to open analyzer trace.",
-                         exc_info=True)
+        except Exception as e:
+            logger.error("Failed to open analyzer trace: %s", e)
 
     async def save_trace(self):
         dump = self._state["dump"]
@@ -685,9 +695,8 @@ class WaveformDock(QtWidgets.QDockWidget):
         try:
             with open(filename, 'wb') as f:
                 f.write(dump)
-        except:
-            logger.error("Failed to save analyzer trace.",
-                         exc_info=True)
+        except Exception as e:
+            logger.error("Failed to save analyzer trace: %s", e)
 
     async def save_vcd(self):
         ddb = self._state["ddb"]
@@ -704,9 +713,8 @@ class WaveformDock(QtWidgets.QDockWidget):
         try:
             with open(filename, 'w') as f:
                 await async_decoded_dump_to_vcd(f, ddb, decoded_dump)
-        except:
-            logger.error("Failed to save to VCD.",
-                         exc_info=True)
+        except Exception as e:
+            logger.error("Faile to save as VCD: %s", e)
         finally:
             logger.info("Finished writing to VCD.")
 
@@ -741,7 +749,6 @@ class WaveformDock(QtWidgets.QDockWidget):
         try:
             service = message["service"]
             if service == "pull_trace_from_device":
-                asyncio.ensure_future(
-                    exc_to_warning(self.proxy_client.rpc_client.pull_from_device()))
+                asyncio.ensure_future(self.proxy_client.pull_from_device_task())
         except:
             logger.error("failed to process CCB", exc_info=True)
