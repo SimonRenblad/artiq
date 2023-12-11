@@ -9,6 +9,7 @@ import socket
 import time
 import asyncio
 import numpy as np
+from sipyco import keepalive
 
 
 logger = logging.getLogger(__name__)
@@ -99,6 +100,70 @@ def decode_message(data):
 
 DecodedDump = namedtuple(
     "DecodedDump", "log_channel dds_onehot_sel messages")
+
+# simplified from sipyco broadcast Receiver
+class AnalyzerProxyReceiver:
+    def __init__(self, notify_cb):
+        if not isinstance(notify_cb, list):
+            notify_cb = [notify_cb]
+        self.notify_cbs = notify_cb
+
+    async def connect(self, host, port):
+        self.reader, self.writer = \
+            await keepalive.async_open_connection(host, port, limit=100 * 1024 * 1024)
+        try:
+            self.receive_task = asyncio.ensure_future(self._receive_cr())
+        except:
+            self.writer.close()
+            del self.reader
+            del self.writer
+            raise
+
+    async def close(self):
+        try:
+            self.receive_task.cancel()
+            try:
+                await asyncio.wait_for(self.receive_task, None)
+            except asyncio.CancelledError:
+                pass
+        finally:
+            self.writer.close()
+            del self.reader
+            del self.writer
+
+    async def _receive_cr(self):
+        try:
+            target = None
+            while True:
+                endian_byte = await self.reader.readexactly(1)
+                if ord(endian_byte) == ord('E'):
+                    endian = '>'
+                elif ord(endian_byte) == ord('e'):
+                    endian = '<'
+                else:
+                    logger.warning("invalid stream data detected")
+                    # discard invalid stream data
+                    continue 
+                header = await self.reader.readexactly(15) 
+                parts = struct.unpack(endian + "IQbbb", header)
+                (sent_bytes, total_byte_count,
+                 error_occurred, log_channel, dds_onehot_sel) = parts
+                if error_occurred:
+                    logger.warning("error occurred within the analyzer, "
+                                   "data may be corrupted")
+                if total_byte_count > sent_bytes:
+                    logger.info("analyzer ring buffer has wrapped %d times",
+                                total_byte_count//sent_bytes)
+                messages = []
+                for _ in range(sent_bytes//32):
+                    data = await self.reader.readexactly(32) # more IO == less event loop lag, may be a bit slower but much less cumbersome, obviously will need testing tho
+                    messages.append(decode_message(data))
+                decoded_dump = DecodedDump(log_channel, bool(dds_onehot_sel), messages)
+
+                for notify_cb in self.notify_cbs:
+                    notify_cb(decoded_dump)
+        finally:
+            pass
 
 
 def _decode_dump_prelude(data):
