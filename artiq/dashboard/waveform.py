@@ -100,10 +100,8 @@ class Waveform(pg.PlotWidget):
         self.setMaximumHeight(Waveform.MAX_HEIGHT)
         self.setMenuEnabled(False)
 
-        self._scope = channel[0]
-        self._name = channel[1]
-        self._ddb_name = channel[2]
-        self._width = channel[3]
+        self._name = channel[0]
+        self._width = channel[1]
 
         self._state = state
         self._symbol = "t"
