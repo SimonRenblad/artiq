@@ -103,8 +103,8 @@ DecodedDump = namedtuple(
 
 # simplified from sipyco broadcast Receiver
 class AnalyzerProxyReceiver:
-    def __init__(self, notify_cb):
-        self.notify_cb = notify_cb
+    def __init__(self):
+        self.queue = asyncio.Queue()
 
     async def connect(self, host, port):
         self.reader, self.writer = \
@@ -155,9 +155,8 @@ class AnalyzerProxyReceiver:
                 messages = []
                 for _ in range(sent_bytes//32):
                     data = await self.reader.readexactly(32)
-                    messages.append(decode_message(data))
-                decoded_dump = DecodedDump(log_channel, bool(dds_onehot_sel), messages)
-                notify_cb(decoded_dump)
+                    dump += data
+                await self.queue.put(dump)
         finally:
             pass
 
