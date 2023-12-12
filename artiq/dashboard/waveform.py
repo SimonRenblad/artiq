@@ -436,13 +436,13 @@ class WaveformProxyClient:
         self._on_sub_reconnect = asyncio.Event()
         self._on_rpc_reconnect = asyncio.Event()
         self._reconnect_rpc_task = None
-        self._reconnect_sub_task = None
+        self._reconnect_receiver_task = None
 
     async def request_dump_task(self):
         try:
             if self.rpc_client.get_rpc_id()[0] is None:
                 raise AttributeError("Unable to identify RPC target. Is analyzer proxy connected?")
-            asyncio.ensure_future(exc_to_warning(self.rpc_client.request_dump()))
+            asyncio.ensure_future(self.rpc_client.request_dump())
         except Exception as e:
             logger.warning("Failed to pull from device: %s", e)
 
@@ -503,12 +503,12 @@ class WaveformProxyClient:
     async def stop(self):
         try:
             self._reconnect_rpc_task.cancel()
-            self._reconnect_sub_task.cancel()
+            self._reconnect_receiver_task.cancel()
             await asyncio.wait_for(self._reconnect_rpc_task, None)
-            await asyncio.wait_for(self._reconnect_sub_task, None)
+            await asyncio.wait_for(self._reconnect_receiver_task, None)
             await self.devices_sub.close()
             self.rpc_client.close_rpc()
-            await self.proxy_sub.close()
+            await self.proxy_receiver.close()
         except Exception as e:
             logger.error("Error occurred while closing proxy connections: %s", e)
 
@@ -565,11 +565,11 @@ class WaveformDock(QtWidgets.QDockWidget):
 
         self.proxy_client = WaveformProxyClient(self._state, loop)
         devices_sub = Subscriber("devices", self.init_ddb, self.update_ddb)
-        proxy_receiver = comm_analyzer.AnalyzerProxyReceiver(notify_cb=self.update_from_dump)
+
+        self.queue = asyncio.Queue(maxsize=5)
+        proxy_receiver = comm_analyzer.AnalyzerProxyReceiver(self.receiver_cb)
         self.proxy_client.devices_sub = devices_sub
         self.proxy_client.proxy_receiver = proxy_receiver
-
-        self._decoder_lock = asyncio.Lock()
 
         grid = LayoutWidget()
         self.setWidget(grid)
@@ -612,22 +612,36 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._add_async_action("Save VCD...", self.save_vcd)
         self._menu_btn.setMenu(self._file_menu)
 
+        self.consumer_task = asyncio.ensure_future(
+                self.decoded_dump_consumer(self._state.update), loop=loop)
+
     def _add_async_action(self, label, coro):
         action = QtWidgets.QAction(label, self)
         action.triggered.connect(lambda: asyncio.ensure_future(exc_to_warning(coro())))
         self._file_menu.addAction(action)
 
-    def update_from_dump(self, decoded_dump):
-        start = time.monotonic()
-        ddb = self._state["ddb"]
-        trace = comm_analyzer.dump_to_waveform(ddb, decoded_dump)
-        trace["dump"] = dump
-        trace["decoded_dump"] = decoded_dump
-        self._state.update(trace)
-        end = time.monotonic()
-        time_taken = (end - start) * 1000
-        logger.info("Core analyzer trace updated in %.2f ms.", time_taken)
-        self.traceDataChanged.emit()
+    def receiver_cb(self, dump):
+        if self.queue.full():
+            self.queue.get_nowait()
+        self.queue.put_nowait(dump)
+
+    async def decoded_dump_consumer(self, notify_cb):
+        try:
+            while True:
+                dump = await self.queue.get()
+                if self.queue.empty(): 
+                    # if multiple traces are sent to the dashboard, discard all but the last one queued
+                    # to avoid unnecessary CPU heavy calcs
+                    ddb = self._state['ddb']
+                    decoded_dump = await comm_analyzer.async_decode_dump(dump)
+                    trace = await comm_analyzer.async_decoded_dump_to_waveform(ddb, decoded_dump)
+                    trace['dump'] = dump
+                    trace['decoded_dump'] = decoded_dump
+                    notify_cb(trace)
+                    self.traceDataChanged.emit()
+                self.queue.task_done()
+        finally:
+            pass
 
     # File IO
     async def open_trace(self):
@@ -643,7 +657,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         try:
             with open(filename, 'rb') as f:
                 dump = f.read()
-            await self.update_from_dump(dump)
+            await self.queue.put(dump)
         except Exception as e:
             logger.error("Failed to open analyzer trace: %s", e)
 
