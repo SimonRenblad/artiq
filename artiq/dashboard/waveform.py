@@ -6,6 +6,7 @@ from sipyco.pc_rpc import AsyncioClient
 
 from artiq.tools import exc_to_warning
 from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
+from artiq.gui.models import DictSyncTreeSepModel, LocalModelManager
 from artiq.gui.dndwidgets import DragDropSplitter, VDragScrollArea
 from artiq.coredevice import comm_analyzer
 import os
@@ -39,31 +40,28 @@ def get_format_waveform_value(val, bit_width, data_format):
     return str(val)  # unreachable
 
 
+class Model(DictSyncTreeSepModel):
+    def __init__(self, init):
+        DictSyncTreeSepModel.__init__(self, "/", ["Channels"], init)
+
+
 class _AddChannelDialog(QtWidgets.QDialog):
     accepted = QtCore.pyqtSignal(list)
 
-    def __init__(self, parent, state):
+    def __init__(self, parent, channels_mgr):
         QtWidgets.QDialog.__init__(self, parent=parent)
-        self.channels = state["channels"]
 
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
         self.setWindowTitle("Add channels")
         grid = QtWidgets.QGridLayout()
         self.setLayout(grid)
-        self._channels_widget = QtWidgets.QTreeWidget()
-        self._channels_widget.setHeaderLabel("Channels")
+        self._channels_widget = QtWidgets.QTreeView()
+        self._channels_widget.setHeaderHidden(True)
+        self._channels_widget.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectItems)
         self._channels_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self._model = Model(dict())
+        channels_mgr.add_setmodel_callback(self.set_model)
         grid.addWidget(self._channels_widget, 0, 0, 1, 2)
-
-        groups = dict()
-        for scope, channel, _, _ in self.channels:
-            if scope not in groups:
-                group = QtWidgets.QTreeWidgetItem([scope])
-                group.setFlags(group.flags() & ~QtCore.Qt.ItemIsSelectable)
-                self._channels_widget.addTopLevelItem(group)
-                groups[scope] = group
-            item = QtWidgets.QTreeWidgetItem([channel])
-            groups[scope].addChild(item)
 
         cancel_button = QtWidgets.QPushButton("Cancel")
         cancel_button.clicked.connect(self.close)
@@ -78,12 +76,19 @@ class _AddChannelDialog(QtWidgets.QDialog):
                 QtWidgets.QStyle.SP_DialogApplyButton))
         grid.addWidget(confirm_button, 1, 1)
 
+    def set_model(self, model):
+        self._model = model
+        self._channels_widget.setModel(model)
+
     def add_channels(self):
-        items = self._channels_widget.selectedItems()
-        items = [(i.parent().text(0), i.text(0)) for i in items]
-        selected_channels = [channel for channel in self.channels
-                             if channel[0:2] in items]
-        self.accepted.emit(selected_channels)
+        selection = self._channels_widget.selectedIndexes()
+        channels = []
+        for select in selection:
+            key = self._model.index_to_key(select)
+            if key is not None:
+                width = self._model[key]
+                channels.append((key, width))
+        self.accepted.emit(channels)
         self.close()
 
 
@@ -134,12 +139,14 @@ class Waveform(pg.PlotWidget):
         self._vb.disableAutoRange(axis=pg.ViewBox.YAxis)
         self._vb.setLimits(xMin=0)
 
-        self._left_ax = self._pi.getAxis("left")
-        self._left_ax.enableAutoSIPrefix(enable=False)
-        self._left_ax.setWidth(20)
+        self._pi.hideAxis("left")
+        #self._left_ax = self._pi.getAxis("left")
+        #self._left_ax.enableAutoSIPrefix(enable=False)
+        #self._left_ax.setWidth(20)
+        #self._left_ax.setStyle()
         if self._width == 1:
             self._pi.setRange(yRange=(0, 1), padding=0.1)
-            self._left_ax.setTicks([[(0, "0"), (1, "1")], []])
+            #self._left_ax.setTicks([[(0, "0"), (1, "1")], []])
             self._data_format = DataFormat.INT
             self._vb.setLimits(yMin=0, yMax=1)
         else:
@@ -164,22 +171,11 @@ class Waveform(pg.PlotWidget):
                 self._vb.setRange(yRange=data_range)
             self._pdi.setData(d)
         except Exception as e:
-            logger.debug("Unable to load data for %s/%s: %s", self._scope, self._name, e)
+            logger.debug("Unable to load data for %s: %s", self._name, e)
             self._pdi.setData(x=np.zeros(1), y=np.zeros(1))
 
-    #def on_load_logs(self):
-    #    logs = self._state["logs"]
-    #    msgs = logs.get(self._ddb_name, [])
-    #    for t, msg in msgs:
-    #        lbl = pg.TextItem(anchor=(0, 1))
-    #        arw = pg.ArrowItem(angle=270, pxMode=True, headLen=5, tailLen=15, tailWidth=1)
-    #        self.addItem(lbl)
-    #        self.addItem(arw)
-    #        lbl.setPos(t, 0)
-    #        lbl.setText(msg)
-    #        arw.setPos(t, 0)
-    #        self._logs.append(lbl)
-    #        self._logs.append(arw)
+    def update_x_max(self):
+        self._vb.setLimits(xMax=self._state["stopped_x"])
 
     def on_set_cursor_visible(self, visible):
         if visible:
@@ -254,9 +250,10 @@ class Waveform(pg.PlotWidget):
 class WaveformArea(QtWidgets.QWidget):
     cursorMoved = QtCore.pyqtSignal(float)
 
-    def __init__(self, parent, state):
+    def __init__(self, parent, state, channels_mgr):
         QtWidgets.QWidget.__init__(self, parent=parent)
         self._state = state
+        self._channels_mgr = channels_mgr
 
         self._is_show_cursor = True
         self._cursor_x_pos = 0
@@ -268,20 +265,24 @@ class WaveformArea(QtWidgets.QWidget):
 
         self._ref_axis = pg.PlotWidget()
         self._ref_axis.hideAxis("bottom")
+        self._ref_axis.hideAxis("left")
         self._ref_axis.hideButtons()
         self._ref_axis.setFixedHeight(45)
         self._ref_axis.setMenuEnabled(False)
         top = pg.AxisItem("top")
         top.setLabel("", units="s")
-        left = pg.AxisItem("left")
-        left.setStyle(textFillLimits=(0, 0))
-        left.setFixedHeight(0)
-        left.setWidth(20)
-        self._ref_axis.setAxisItems({"top": top, "left": left})
+        #left = pg.AxisItem("left")
+        #left.setStyle(textFillLimits=(0, 0))
+        #left.setFixedHeight(0)
+        #left.setWidth(20)
+        #self._ref_axis.setAxisItems({"top": top, "left": left})
+        self._ref_axis.setAxisItems({"top": top})
 
         self._ref_vb = self._ref_axis.getPlotItem().getViewBox()
         self._ref_vb.setFixedHeight(0)
         self._ref_vb.setMouseEnabled(x=True, y=False)
+        self._ref_vb.setLimits(xMin=0)
+
         layout.addWidget(self._ref_axis)
 
         scroll_area = VDragScrollArea(self)
@@ -353,7 +354,7 @@ class WaveformArea(QtWidgets.QWidget):
         cw.on_cursor_moved(self._cursor_x_pos)
 
     async def _get_channels_from_dialog(self):
-        dialog = _AddChannelDialog(self, self._state)
+        dialog = _AddChannelDialog(self, self._channels_mgr)
         fut = asyncio.Future()
 
         def on_accept(s):
@@ -377,22 +378,7 @@ class WaveformArea(QtWidgets.QWidget):
         self._waveform_area.refresh()
 
     def _update_xrange(self):
-        data = self._state["data"]
-        logs = self._state["logs"]
-        maximum = 0
-        for d in data.values():
-            if d is None or len(d) == 0:
-                continue
-            temp = d[-1][0]
-            if maximum < temp:
-                maximum = temp
-        for d in logs.values():
-            if d is None or len(d) == 0:
-                continue
-            temp = d[-1][0]
-            if maximum < temp:
-                maximum = temp
-        self._ref_axis.setRange(xRange=(0, maximum))
+        self._ref_axis.setLimits(xMax=maximum)
 
     def _clear_plots(self):
         for i in reversed(range(self._waveform_area.count())):
@@ -404,7 +390,10 @@ class WaveformArea(QtWidgets.QWidget):
             cw = self._waveform_area.widget(i)
             cw.on_load_data()
             cw.on_cursor_moved(self._cursor_x_pos)
-        self._update_xrange()
+            cw.update_x_max()
+        maximum = self._state["stopped_x"]
+        self._ref_axis.setLimits(xMax=maximum)
+        self._ref_axis.setRange(xRange=(0, maximum))
 
     def on_cursor_moved(self, x):
         self._cursor_x_pos = x
@@ -549,14 +538,17 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.setFeatures(
             QtWidgets.QDockWidget.DockWidgetMovable | QtWidgets.QDockWidget.DockWidgetFloatable)
 
+        self._channels_mgr = LocalModelManager(Model)
+        self._channels_mgr.init({})
+
         self._state = {
             "timescale": None,
+            "stopped_x": None,
             "logs": dict(),
             "data": dict(),
             "dump": None,
             "decoded_dump": None,
             "ddb": dict(),
-            "channels": list()
         }
 
         self._current_dir = "c://"
@@ -590,7 +582,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._cursor_control = _CursorTimeControl(self)
         grid.addWidget(self._cursor_control, 0, 3, colspan=3)
 
-        self._waveform_area = WaveformArea(self, self._state)
+        self._waveform_area = WaveformArea(self, self._state, self._channels_mgr)
         self.traceDataChanged.connect(lambda: self._waveform_area.on_trace_update())
         self._cursor_control.submit.connect(self._waveform_area.on_cursor_moved)
         self._waveform_area.cursorMoved.connect(self._cursor_control.set_time)
@@ -703,8 +695,7 @@ class WaveformDock(QtWidgets.QDockWidget):
     def update_ddb(self, mod):
         devices = self._state["ddb"]
         addr = None
-        self._state["channels"].clear()
-        self._state["channels"].extend(comm_analyzer.get_channel_list(devices))
+        self._channels_mgr.init(get_channel_list(devices))
         for name, desc in devices.items():
             if isinstance(desc, dict):
                 if desc["type"] == "controller" and name == "core_analyzer":

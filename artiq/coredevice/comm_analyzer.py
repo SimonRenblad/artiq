@@ -244,16 +244,14 @@ class VCDManager:
     def set_timescale_ps(self, timescale):
         self.out.write("$timescale {}ps $end\n".format(round(timescale)))
 
-    def get_channel(self, name, width, prefix="", suffix=""):
-        name = prefix + name + suffix
+    def get_channel(self, name, width):
         code = next(self.codes)
         self.out.write("$var wire {width} {code} {name} $end\n"
                        .format(name=name, code=code, width=width))
         return VCDChannel(self.out, code)
 
     @contextmanager
-    def scope(self, scope, name, prefix="", suffix=""):
-        name = prefix + name + suffix
+    def scope(self, scope, name):
         self.out.write("$scope module {}/{} $end\n".format(scope, name))
         yield
         self.out.write("$upscope $end\n")
@@ -262,6 +260,9 @@ class VCDManager:
         if time != self.current_time:
             self.out.write("#{}\n".format(time))
             self.current_time = time
+
+    def set_end_time(self, time):
+        pass
 
 
 class WaveformChannel:
@@ -291,46 +292,50 @@ class WaveformManager:
     def __init__(self):
         self.current_time = 0
         self.channels = list()
-        self.trace = {"timescale": None, "logs": dict(), "data": dict()}
+        self.current_scope = ""
+        self.trace = {"timescale": None, "stopped_x": None, "logs": dict(), "data": dict()}
 
     def set_timescale_ps(self, timescale):
         self.trace["timescale"] = timescale
 
-    def get_channel(self, name, width, prefix="", suffix="", is_log=False):
+    def get_channel(self, name, width, is_log=False):
         if is_log:
             data = self.trace["logs"][name] = list()
         else:
-            long_name = prefix + name + suffix
-            data = self.trace["data"][long_name] = list()
+            data = self.trace["data"][name] = list()
         channel = WaveformChannel(data, self.current_time)
         self.channels.append(channel)
         return channel
 
     @contextmanager
-    def scope(self, scope, name, prefix="", suffix=""):
+    def scope(self, scope, name):
+        old_scope = self.current_scope
+        self.current_scope = scope + "/"
         yield
+        self.current_scope = old_scope
 
     def set_time(self, time):
         for channel in self.channels:
             channel.set_time(time * 1e-12 * self.trace["timescale"])
 
+    def set_end_time(self, time):
+        self.trace["stopped_x"] = time * 1e-12 * self.trace["timescale"]
+
 
 class ChannelsOnlyManager:
-    DEFAULT_SCOPE = "<default>"
 
     def __init__(self):
-        self.current_scope = ChannelsOnlyManager.DEFAULT_SCOPE
-        self.channels = list()
+        self.current_scope = ""
+        self.channels = dict()
 
-    def get_channel(self, name, width, prefix="", suffix="", is_log=False):
-        long_name = prefix + name + suffix
-        self.channels.append((self.current_scope, long_name, name, width))
+    def get_channel(self, name, width, is_log=False):
+        self.channels[self.current_scope + name] = width
         return None
 
     @contextmanager
-    def scope(self, scope, name, prefix="", suffix=""):
+    def scope(self, scope, name):
         old_scope = self.current_scope
-        self.current_scope = scope
+        self.current_scope = scope + "/"
         yield
         self.current_scope = old_scope
 
@@ -338,7 +343,7 @@ class ChannelsOnlyManager:
 class TTLHandler:
     def __init__(self, manager, name):
         self.name = name
-        self.channel_value = manager.get_channel(name, 1, prefix="ttl/")
+        self.channel_value = manager.get_channel("ttl/" + name, 1)
         self.last_value = "X"
         self.oe = True
 
@@ -367,7 +372,7 @@ class TTLClockGenHandler:
         self.name = name
         self.ref_period = ref_period
         self.channel_frequency = manager.get_channel(
-            name, 64, prefix="ttl_clkgen/")
+            "ttl_clkgen/" + name, 64)
 
     def process_message(self, message):
         if isinstance(message, OutputMessage):
@@ -390,9 +395,9 @@ class DDSHandler:
         dds_channel = dict()
         with self.manager.scope("dds", name):
             dds_channel["vcd_frequency"] = \
-                self.manager.get_channel(name, 64, suffix="/frequency")
+                self.manager.get_channel(name + "/frequency", 64)
             dds_channel["vcd_phase"] = \
-                self.manager.get_channel(name, 64, suffix="/phase")
+                self.manager.get_channel(name + "/phase", 64)
         dds_channel["ftw"] = [None, None]
         dds_channel["pow"] = None
         self.dds_channels[dds_channel_nr] = dds_channel
@@ -445,7 +450,7 @@ class WishboneHandler:
     def __init__(self, manager, name, read_bit):
         self._reads = []
         self._read_bit = read_bit
-        self.stb = manager.get_channel(name, 1, suffix="/stb")
+        self.stb = manager.get_channel(name + "/stb", 1)
 
     def process_message(self, message):
         self.stb.set_value("1")
@@ -485,7 +490,7 @@ class SPIMasterHandler(WishboneHandler):
                     ("write_length", 8), ("read_length", 8),
                     ("write", 32), ("read", 32)]:
                 self.channels[reg_name] = manager.get_channel(
-                        name, reg_width, suffix="/" + reg_name)
+                    "{}/{}".format(name, reg_name), reg_width)
 
     def process_write(self, address, data):
         if address == 0:
@@ -515,7 +520,7 @@ class SPIMaster2Handler(WishboneHandler):
         self.channels = {}
         self.scope = "spi2"
         with manager.scope("spi2", name):
-            self.stb = manager.get_channel(name, 1, suffix="/stb")
+            self.stb = manager.get_channel(name + "/stb", 1)
             for reg_name, reg_width in [
                     ("flags", 8),
                     ("length", 5),
@@ -524,7 +529,7 @@ class SPIMaster2Handler(WishboneHandler):
                     ("write", 32),
                     ("read", 32)]:
                 self.channels[reg_name] = manager.get_channel(
-                    name, reg_width, suffix="/" + reg_name)
+                    "{}/{}".format(name, reg_name), reg_width)
 
     def process_message(self, message):
         self.stb.set_value("1")
@@ -575,9 +580,8 @@ class LogHandler:
     def __init__(self, manager, log_channels):
         self.channels = dict()
         for name, maxlength in log_channels.items():
-            self.channels[name] = manager.get_channel(name,
+            self.channels[name] = manager.get_channel("logs/" + name,
                                                       maxlength * 8,
-                                                      suffix="/logs",
                                                       is_log=True)
         self.current_entry = ""
 
@@ -723,6 +727,9 @@ def _decoded_dump_to_target_prelude(manager, devices, dump, uniform_interval):
         dds_sysclk = 3e9  # guess
 
     if isinstance(dump.messages[-1], StoppedMessage):
+        m = dump.messages[-1]
+        end_time = get_message_time(m)
+        manager.set_end_time(end_time)
         messages = dump.messages[:-1]
     else:
         logger.warning("StoppedMessage missing")
