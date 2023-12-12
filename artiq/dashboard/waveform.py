@@ -48,11 +48,11 @@ class Model(DictSyncTreeSepModel):
 class _AddChannelDialog(QtWidgets.QDialog):
     accepted = QtCore.pyqtSignal(list)
 
-    def __init__(self, parent, channels_mgr):
+    def __init__(self, parent, channels_mgr, title):
         QtWidgets.QDialog.__init__(self, parent=parent)
 
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
-        self.setWindowTitle("Add channels")
+        self.setWindowTitle("Add " + title)
         grid = QtWidgets.QGridLayout()
         self.setLayout(grid)
         self._channels_widget = QtWidgets.QTreeView()
@@ -99,7 +99,7 @@ class Waveform(pg.PlotWidget):
 
     cursorMoved = QtCore.pyqtSignal(float)
 
-    def __init__(self, channel, state, parent=None):
+    def __init__(self, channel, state, parent=None, is_log=False):
         pg.PlotWidget.__init__(self, parent=parent, x=None, y=None)
         self.setMinimumHeight(Waveform.MIN_HEIGHT)
         self.setMaximumHeight(Waveform.MAX_HEIGHT)
@@ -107,8 +107,13 @@ class Waveform(pg.PlotWidget):
 
         self._name = channel[0]
         self._width = channel[1]
+        self._is_log = is_log
 
         self._state = state
+        if is_log:
+            self._data = self._state['logs']
+        else:
+            self._data = self._state['data']
         self._symbol = "t"
         self._is_show_markers = False
         self._is_show_cursor = True
@@ -163,16 +168,17 @@ class Waveform(pg.PlotWidget):
         self.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
 
     def on_load_data(self):
-        data = self._state["data"]
-        try:
-            d = np.array(data[self._name])
-            data_range = (np.min(d[:, 1]), np.max(d[:, 1]))
-            if self._width != 1:
-                self._vb.setRange(yRange=data_range)
-            self._pdi.setData(d)
-        except Exception as e:
-            logger.debug("Unable to load data for %s: %s", self._name, e)
-            self._pdi.setData(x=np.zeros(1), y=np.zeros(1))
+        data = self._data[self._name]
+        for t, val in data:
+            lbl = pg.TextItem(anchor=(0, 1))
+            arw = pg.ArrowItem(angle=270, pxMode=True, headLen=5, tailLen=15, tailWidth=1)
+            self.addItem(lbl)
+            self.addItem(arw)
+            lbl.setPos(t, 0)
+            lbl.setText(val)
+            arw.setPos(t, 0)
+            self._logs.append(lbl)
+            self._logs.append(arw)
 
     def update_x_max(self):
         self._vb.setLimits(xMax=self._state["stopped_x"])
@@ -250,10 +256,11 @@ class Waveform(pg.PlotWidget):
 class WaveformArea(QtWidgets.QWidget):
     cursorMoved = QtCore.pyqtSignal(float)
 
-    def __init__(self, parent, state, channels_mgr):
+    def __init__(self, parent, state, channels_mgr, log_channels_mgr):
         QtWidgets.QWidget.__init__(self, parent=parent)
         self._state = state
         self._channels_mgr = channels_mgr
+        self._log_channels_mgr = log_channels_mgr
 
         self._is_show_cursor = True
         self._cursor_x_pos = 0
@@ -340,10 +347,10 @@ class WaveformArea(QtWidgets.QWidget):
         action.triggered.connect(self._waveform_area.resetSizes)
         waveform.addAction(action)
 
-    def _add_plot(self, channel):
+    def _add_plot(self, channel, is_log):
         num_channels = self._waveform_area.count()
         self._waveform_area.setFixedHeight((num_channels + 1) * Waveform.PREF_HEIGHT)
-        cw = Waveform(channel, self._state, parent=self._waveform_area)
+        cw = Waveform(channel, self._state, parent=self._waveform_area, is_log=is_log)
         cw.cursorMoved.connect(lambda x: self.on_cursor_moved(x))
         cw.cursorMoved.connect(self.cursorMoved.emit)
         self._add_waveform_actions(cw)
@@ -354,7 +361,7 @@ class WaveformArea(QtWidgets.QWidget):
         cw.on_cursor_moved(self._cursor_x_pos)
 
     async def _get_channels_from_dialog(self):
-        dialog = _AddChannelDialog(self, self._channels_mgr)
+        dialog = _AddChannelDialog(self, self._channels_mgr, "channels")
         fut = asyncio.Future()
 
         def on_accept(s):
@@ -366,10 +373,28 @@ class WaveformArea(QtWidgets.QWidget):
     async def _add_plots_dialog_task(self):
         channels = await self._get_channels_from_dialog()
         for channel in channels:
-            self._add_plot(channel)
+            self._add_plot(channel, is_log=False)
 
     def add_plots_dialog(self):
         asyncio.ensure_future(exc_to_warning(self._add_plots_dialog_task()))
+
+    async def _get_log_channels_from_dialog(self):
+        dialog = _AddChannelDialog(self, self._log_channels_mgr, "logs")
+        fut = asyncio.Future()
+
+        def on_accept(s):
+            fut.set_result(s)
+        dialog.accepted.connect(on_accept)
+        dialog.open()
+        return await fut
+
+    async def _add_log_plots_dialog_task(self):
+        channels = await self._get_log_channels_from_dialog()
+        for channel in channels:
+            self._add_plot(channel, is_log=True)
+
+    def add_log_plots_dialog(self):
+        asyncio.ensure_future(exc_to_warning(self._add_log_plots_dialog_task()))
 
     def _remove_plot(self, cw):
         num_channels = self._waveform_area.count() - 1
@@ -541,6 +566,9 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._channels_mgr = LocalModelManager(Model)
         self._channels_mgr.init({})
 
+        self._log_channels_mgr = LocalModelManager(Model)
+        self._log_channels_mgr.init({})
+
         self._state = {
             "timescale": None,
             "stopped_x": None,
@@ -579,13 +607,11 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._request_dump_btn.clicked.connect(
             lambda: asyncio.ensure_future(self.proxy_client.request_dump_task()))
 
-        self._cursor_control = _CursorTimeControl(self)
-        grid.addWidget(self._cursor_control, 0, 3, colspan=3)
-
-        self._waveform_area = WaveformArea(self, self._state, self._channels_mgr)
-        self.traceDataChanged.connect(lambda: self._waveform_area.on_trace_update())
-        self._cursor_control.submit.connect(self._waveform_area.on_cursor_moved)
-        self._waveform_area.cursorMoved.connect(self._cursor_control.set_time)
+        self._waveform_area = WaveformArea(self, self._state, 
+                                           self._channels_mgr,
+                                           self._log_channels_mgr)
+        self.traceDataChanged.connect(self._waveform_area.on_trace_update)
+        self.traceDataChanged.connect(self._update_log_channels)
         grid.addWidget(self._waveform_area, 2, 0, colspan=12)
 
         self._add_btn = QtWidgets.QToolButton()
@@ -595,6 +621,19 @@ class WaveformDock(QtWidgets.QDockWidget):
                 QtWidgets.QStyle.SP_FileDialogListView))
         grid.addWidget(self._add_btn, 0, 2)
         self._add_btn.clicked.connect(self._waveform_area.add_plots_dialog)
+
+        self._add_logs_btn = QtWidgets.QToolButton()
+        self._add_logs_btn.setToolTip("Add logs...")
+        self._add_logs_btn.setIcon(
+            QtWidgets.QApplication.style().standardIcon(
+                QtWidgets.QStyle.SP_FileDialogListView))
+        grid.addWidget(self._add_logs_btn, 0, 3)
+        self._add_logs_btn.clicked.connect(self._waveform_area.add_log_plots_dialog)
+
+        self._cursor_control = _CursorTimeControl(self)
+        grid.addWidget(self._cursor_control, 0, 4, colspan=3)
+        self._cursor_control.submit.connect(self._waveform_area.on_cursor_moved)
+        self._waveform_area.cursorMoved.connect(self._cursor_control.set_time)
 
         self._file_menu = QtWidgets.QMenu()
         self._add_async_action("Open trace...", self.open_trace)
@@ -609,6 +648,9 @@ class WaveformDock(QtWidgets.QDockWidget):
         action = QtWidgets.QAction(label, self)
         action.triggered.connect(lambda: asyncio.ensure_future(exc_to_warning(coro())))
         self._file_menu.addAction(action)
+    
+    def _update_log_channels(self):
+        self._log_channels_mgr.init(self._state['logs'])
 
     def receiver_cb(self, dump):
         if self.queue.full():
@@ -695,12 +737,12 @@ class WaveformDock(QtWidgets.QDockWidget):
     def update_ddb(self, mod):
         devices = self._state["ddb"]
         addr = None
-        self._channels_mgr.init(get_channel_list(devices))
+        self._channels_mgr.init(comm_analyzer.get_channel_list(devices))
         for name, desc in devices.items():
             if isinstance(desc, dict):
                 if desc["type"] == "controller" and name == "core_analyzer":
                     addr = desc["host"]
-                    port = desc.get("port_proxy", 1382)
-                    port_control = desc.get("port_proxy_control", 1385)
+                    port = desc.get("port_proxy", 1385)
+                    port_control = desc.get("port_proxy_control", 1386)
         if addr is not None:
             self.proxy_client.update_address(addr, port, port_control)
