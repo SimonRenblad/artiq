@@ -101,10 +101,11 @@ def decode_message(data):
 DecodedDump = namedtuple(
     "DecodedDump", "log_channel dds_onehot_sel messages")
 
+
 # simplified from sipyco broadcast Receiver
 class AnalyzerProxyReceiver:
-    def __init__(self):
-        self.queue = asyncio.Queue()
+    def __init__(self, receive_cb):
+        self.receive_cb = receive_cb
 
     async def connect(self, host, port):
         self.reader, self.writer = \
@@ -139,24 +140,12 @@ class AnalyzerProxyReceiver:
                 elif ord(endian_byte) == ord('e'):
                     endian = '<'
                 else:
-                    logger.warning("invalid stream data detected")
                     # discard invalid stream data
                     continue 
                 header = await self.reader.readexactly(15) 
-                parts = struct.unpack(endian + "IQbbb", header)
-                (sent_bytes, total_byte_count,
-                 error_occurred, log_channel, dds_onehot_sel) = parts
-                if error_occurred:
-                    logger.warning("error occurred within the analyzer, "
-                                   "data may be corrupted")
-                if total_byte_count > sent_bytes:
-                    logger.info("analyzer ring buffer has wrapped %d times",
-                                total_byte_count//sent_bytes)
-                messages = []
-                for _ in range(sent_bytes//32):
-                    data = await self.reader.readexactly(32)
-                    dump += data
-                await self.queue.put(dump)
+                sent_bytes = struct.unpack(endian + "IQbbb", header)[0]
+                data = await self.reader.readexactly(sent_bytes)
+                self.receive_cb(endian_byte + header + data)
         finally:
             pass
 
