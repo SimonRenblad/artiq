@@ -271,10 +271,6 @@ class WaveformChannel:
         self.current_time = current_time
 
     def set_value(self, value):
-        if value == "X":
-            value = np.nan
-        else:
-            value = int(value, 2)
         self.data.append((self.current_time, value))
 
     def set_value_double(self, x):
@@ -282,9 +278,6 @@ class WaveformChannel:
 
     def set_time(self, time):
         self.current_time = time
-
-    def set_log(self, log_message):
-        self.data.append((self.current_time, log_message))
 
 
 class WaveformManager:
