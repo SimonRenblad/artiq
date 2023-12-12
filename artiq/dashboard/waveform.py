@@ -106,9 +106,7 @@ class Waveform(pg.PlotWidget):
         self._width = channel[3]
 
         self._state = state
-        self._logs = list()
         self._symbol = "t"
-        self._is_show_logs = True
         self._is_show_markers = False
         self._is_show_cursor = True
         self._is_digital = True
@@ -171,29 +169,19 @@ class Waveform(pg.PlotWidget):
             logger.debug("Unable to load data for %s/%s: %s", self._scope, self._name, e)
             self._pdi.setData(x=np.zeros(1), y=np.zeros(1))
 
-    def on_load_logs(self):
-        logs = self._state["logs"]
-        msgs = logs.get(self._ddb_name, [])
-        for t, msg in msgs:
-            lbl = pg.TextItem(anchor=(0, 1))
-            arw = pg.ArrowItem(angle=270, pxMode=True, headLen=5, tailLen=15, tailWidth=1)
-            self.addItem(lbl)
-            self.addItem(arw)
-            lbl.setPos(t, 0)
-            lbl.setText(msg)
-            arw.setPos(t, 0)
-            self._logs.append(lbl)
-            self._logs.append(arw)
-
-    def on_toggle_logs(self):
-        if self._is_show_logs:
-            for lbl in self._logs:
-                self.removeItem(lbl)
-            self._is_show_logs = False
-        else:
-            for lbl in self._logs:
-                self.addItem(lbl)
-            self._is_show_logs = True
+    #def on_load_logs(self):
+    #    logs = self._state["logs"]
+    #    msgs = logs.get(self._ddb_name, [])
+    #    for t, msg in msgs:
+    #        lbl = pg.TextItem(anchor=(0, 1))
+    #        arw = pg.ArrowItem(angle=270, pxMode=True, headLen=5, tailLen=15, tailWidth=1)
+    #        self.addItem(lbl)
+    #        self.addItem(arw)
+    #        lbl.setPos(t, 0)
+    #        lbl.setText(msg)
+    #        arw.setPos(t, 0)
+    #        self._logs.append(lbl)
+    #        self._logs.append(arw)
 
     def on_set_cursor_visible(self, visible):
         if visible:
@@ -310,12 +298,6 @@ class WaveformArea(QtWidgets.QWidget):
         layout.addWidget(scroll_area)
 
     def _add_waveform_actions(self, waveform):
-        action = QtWidgets.QAction("Show RTIO logs", waveform)
-        action.setCheckable(True)
-        action.setChecked(True)
-        action.triggered.connect(waveform.on_toggle_logs)
-        waveform.addAction(action)
-
         action = QtWidgets.QAction("Show message markers", waveform)
         action.setCheckable(True)
         action.setChecked(False)
@@ -370,7 +352,6 @@ class WaveformArea(QtWidgets.QWidget):
         cw.getPlotItem().showGrid(x=True, y=True)
         self._waveform_area.addWidget(cw)
         cw.on_load_data()
-        cw.on_load_logs()
         cw.on_cursor_moved(self._cursor_x_pos)
 
     async def _get_channels_from_dialog(self):
@@ -424,7 +405,6 @@ class WaveformArea(QtWidgets.QWidget):
         for i in range(self._waveform_area.count()):
             cw = self._waveform_area.widget(i)
             cw.on_load_data()
-            cw.on_load_logs()
             cw.on_cursor_moved(self._cursor_x_pos)
         self._update_xrange()
 
