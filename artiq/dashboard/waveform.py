@@ -21,25 +21,6 @@ import time
 logger = logging.getLogger(__name__)
 
 
-DataFormat = Enum("DataFormat", ["INT", "HEX", "BIN", "REAL"])
-
-
-def get_format_waveform_value(val, bit_width, data_format):
-    if val is None:
-        return ""
-    if data_format == DataFormat.REAL:
-        return "{:f}".format(val)
-    val = int(val)
-    if data_format == DataFormat.INT:
-        return "{:d}".format(val)
-    hex_width = (bit_width - 1) // 4 + 1
-    if data_format == DataFormat.HEX:
-        return "{v:0{w}X}".format(v=val, w=hex_width)
-    if data_format == DataFormat.BIN:
-        return "{v:0{w}b}".format(v=val, w=bit_width)
-    return str(val)  # unreachable
-
-
 class Model(DictSyncTreeSepModel):
     def __init__(self, init):
         DictSyncTreeSepModel.__init__(self, "/", ["Channels"], init)
@@ -152,10 +133,7 @@ class Waveform(pg.PlotWidget):
         if self._width == 1:
             self._pi.setRange(yRange=(0, 1), padding=0.1)
             #self._left_ax.setTicks([[(0, "0"), (1, "1")], []])
-            self._data_format = DataFormat.INT
             self._vb.setLimits(yMin=0, yMax=1)
-        else:
-            self._data_format = DataFormat.REAL
 
         self._legend = self.addLegend(offset=(1, 1))
         self._legend.addItem(self._pdi, self._name)
@@ -216,22 +194,6 @@ class Waveform(pg.PlotWidget):
             self._cursor_y = self._pdi.yData[ind]
         else:
             self._cursor_y = None
-        self._refresh_cursor_label()
-
-    def on_set_int(self):
-        self._data_format = DataFormat.INT
-        self._refresh_cursor_label()
-
-    def on_set_real(self):
-        self._data_format = DataFormat.REAL
-        self._refresh_cursor_label()
-
-    def on_set_hex(self):
-        self._data_format = DataFormat.HEX
-        self._refresh_cursor_label()
-
-    def on_set_bin(self):
-        self._data_format = DataFormat.BIN
         self._refresh_cursor_label()
 
     # override
@@ -308,23 +270,6 @@ class WaveformArea(QtWidgets.QWidget):
         action.setCheckable(True)
         action.setChecked(False)
         action.triggered.connect(waveform.on_toggle_markers)
-        waveform.addAction(action)
-
-        action = QtWidgets.QAction("Data Format", waveform)
-        menu = QtWidgets.QMenu(waveform)
-        a1 = QtWidgets.QAction("Int", menu)
-        a1.triggered.connect(waveform.on_set_int)
-        a2 = QtWidgets.QAction("Real", menu)
-        a2.triggered.connect(waveform.on_set_real)
-        a3 = QtWidgets.QAction("Hex", menu)
-        a3.triggered.connect(waveform.on_set_hex)
-        a4 = QtWidgets.QAction("Bin", menu)
-        a4.triggered.connect(waveform.on_set_bin)
-        menu.addAction(a1)
-        menu.addAction(a2)
-        menu.addAction(a3)
-        menu.addAction(a4)
-        action.setMenu(menu)
         waveform.addAction(action)
 
         action = QtWidgets.QAction(waveform)
@@ -522,7 +467,7 @@ class WaveformProxyClient:
             self.rpc_client.close_rpc()
             await self.proxy_receiver.close()
         except Exception as e:
-            logger.error("Error occurred while closing proxy connections: %s", e)
+            logger.error("Error occurred while closing proxy connections: %s", e, exc_info=True)
 
 
 class _CursorTimeControl(QtWidgets.QLineEdit):
@@ -585,7 +530,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         devices_sub = Subscriber("devices", self.init_ddb, self.update_ddb)
 
         self.queue = asyncio.Queue(maxsize=5)
-        proxy_receiver = comm_analyzer.AnalyzerProxyReceiver(self.receiver_cb)
+        proxy_receiver = comm_analyzer.AnalyzerProxyReceiver(self.on_dump_receive)
         self.proxy_client.devices_sub = devices_sub
         self.proxy_client.proxy_receiver = proxy_receiver
 
@@ -607,7 +552,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._request_dump_btn.clicked.connect(
             lambda: asyncio.ensure_future(self.proxy_client.request_dump_task()))
 
-        self._waveform_area = WaveformArea(self, self._state, 
+        self._waveform_area = WaveformArea(self, self._state,
                                            self._channels_mgr,
                                            self._log_channels_mgr)
         self.traceDataChanged.connect(self._waveform_area.on_trace_update)
@@ -641,41 +586,23 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._add_async_action("Save VCD...", self.save_vcd)
         self._menu_btn.setMenu(self._file_menu)
 
-        self.consumer_task = asyncio.ensure_future(
-                self.decoded_dump_consumer(self._state.update), loop=loop)
-
     def _add_async_action(self, label, coro):
         action = QtWidgets.QAction(label, self)
         action.triggered.connect(lambda: asyncio.ensure_future(exc_to_warning(coro())))
         self._file_menu.addAction(action)
-    
+
     def _update_log_channels(self):
         self._log_channels_mgr.init(self._state['logs'])
 
-    def receiver_cb(self, dump):
-        if self.queue.full():
-            self.queue.get_nowait()
-        self.queue.put_nowait(dump)
+    def on_dump_receive(self, *args):
+        header = comm_analyzer.decode_header_from_receiver(*args)
+        decoded_dump = comm_analyzer.decode_dump_loop(*header)
+        ddb = self._state['ddb']
+        trace = comm_analyzer.decoded_dump_to_waveform(ddb, decoded_dump)
+        self._state.update(trace)
+        self.traceDataChanged.emit()
 
-    async def decoded_dump_consumer(self, notify_cb):
-        try:
-            while True:
-                dump = await self.queue.get()
-                if self.queue.empty(): 
-                    # if multiple traces are sent to the dashboard, discard all but the last one queued
-                    # to avoid unnecessary CPU heavy calcs
-                    ddb = self._state['ddb']
-                    decoded_dump = await comm_analyzer.async_decode_dump(dump)
-                    trace = await comm_analyzer.async_decoded_dump_to_waveform(ddb, decoded_dump)
-                    trace['dump'] = dump
-                    trace['decoded_dump'] = decoded_dump
-                    notify_cb(trace)
-                    self.traceDataChanged.emit()
-                self.queue.task_done()
-        finally:
-            pass
-
-    # File IO
+    # File IO # TODO -> fix this
     async def open_trace(self):
         try:
             filename = await get_open_file_name(
@@ -689,7 +616,6 @@ class WaveformDock(QtWidgets.QDockWidget):
         try:
             with open(filename, 'rb') as f:
                 dump = f.read()
-            await self.queue.put(dump)
         except Exception as e:
             logger.error("Failed to open analyzer trace: %s", e)
 
