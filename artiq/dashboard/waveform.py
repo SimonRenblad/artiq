@@ -214,6 +214,11 @@ class Waveform(pg.PlotWidget):
         pos = self._vb.mapSceneToView(e.pos())
         self.cursorMoved.emit(pos.x())
 
+    # override
+    def wheelEvent(self, e):
+        if e.modifiers() & QtCore.Qt.ShiftModifier:
+            super().wheelEvent(e)
+
 
 class WaveformArea(QtWidgets.QWidget):
     cursorMoved = QtCore.pyqtSignal(float)
