@@ -111,7 +111,7 @@ class AnalyzerProxyReceiver:
 
     async def connect(self, host, port):
         self.reader, self.writer = \
-            await keepalive.async_open_connection(host, port, limit=100 * 1024 * 1024)
+            await keepalive.async_open_connection(host, port)
         try:
             self.receive_task = asyncio.ensure_future(self._receive_cr())
         except:
@@ -134,20 +134,21 @@ class AnalyzerProxyReceiver:
 
     async def _receive_cr(self):
         try:
-            target = None
             while True:
                 endian_byte = await self.reader.readexactly(1)
-                if ord(endian_byte) == ord('E'):
+                if endian_byte == b"E":
                     endian = '>'
-                elif ord(endian_byte) == ord('e'):
+                elif endian_byte == b"e":
                     endian = '<'
                 else:
-                    # discard invalid stream data
-                    continue 
-                header = await self.reader.readexactly(15) 
-                sent_bytes = struct.unpack(endian + "IQbbb", header)[0]
-                data = await self.reader.readexactly(sent_bytes)
-                self.receive_cb(endian_byte + header + data)
+                    raise ValueError
+                payload_length_word = await self.reader.readexactly(4)
+                payload_length = struct.unpack(endian + "I", payload_length_word)[0]
+                if payload_length > 10 * 512 * 1024:
+                    # 10x buffer size of firmware
+                    raise ValueError
+                data = await self.reader.readexactly(payload_length + 11)
+                self.receive_cb(endian, payload_length, data)
         finally:
             pass
 
@@ -187,6 +188,34 @@ def decode_dump(data):
     messages = []
     for _ in range(sent_bytes//32):
         messages.append(decode_message(data[position:position+32]))
+        position += 32
+    return DecodedDump(log_channel, bool(dds_onehot_sel), messages)
+
+
+def decode_header_from_receiver(endian, payload_length, data):
+    parts = struct.unpack(endian + "Qbbb", data[:11])
+    (total_byte_count,
+     error_occurred, log_channel, dds_onehot_sel) = parts
+
+    expected_len = payload_length + 11
+    if expected_len != len(data):
+        raise ValueError("analyzer dump has incorrect length",
+                          "({}/{})".format(expected_len, len(data)))
+    if error_occurred:
+        logger.warning("error occurred within the analyzer, "
+                       "data may be corrupted")
+    if total_byte_count > payload_length:
+        logger.info("analyzer ring buffer has wrapped %d times",
+                    total_byte_count // payload_length)
+    data = data[11:]
+    return (payload_length, log_channel, dds_onehot_sel, data)
+
+
+def decode_dump_loop(payload_length, log_channel, dds_onehot_sel, data):
+    messages = []
+    position = 0
+    for _ in range(payload_length // 32):
+        messages.append(decode_message(data[position:position + 32]))
         position += 32
     return DecodedDump(log_channel, bool(dds_onehot_sel), messages)
 
@@ -246,7 +275,7 @@ class AnalyzerProxyReceiver:
                 if payload_length > 10 * 512 * 1024:
                     # 10x buffer size of firmware
                     raise ValueError
-                data = await self.reader.readexactly(payload_length)
+                data = await self.reader.readexactly(payload_length + 11)
                 self.receive_cb(endian, payload_length, data)
         finally:
             pass
@@ -328,6 +357,9 @@ class WaveformChannel:
 
     def set_time(self, time):
         self.current_time = time
+
+    def set_log(self, message):
+        self.data.append((self.current_time, message))
 
 
 class WaveformManager:
