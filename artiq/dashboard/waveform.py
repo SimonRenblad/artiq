@@ -67,7 +67,7 @@ class _AddChannelDialog(QtWidgets.QDialog):
         for select in selection:
             key = self._model.index_to_key(select)
             if key is not None:
-                width = self._model[key]
+                width = self._model[key].ref
                 channels.append((key, width))
         self.accepted.emit(channels)
         self.close()
@@ -95,9 +95,9 @@ class Waveform(pg.PlotWidget):
         self._y_data = []
         self.ty = 'digital'
         self._symbol = "t"
+        self._labels = []
         self._is_show_markers = False
         self._is_show_cursor = True
-        self._is_digital = True
 
         self._pi = self.getPlotItem()
         self._pi.setRange(yRange=(0, 1), padding=0.1)
@@ -138,6 +138,7 @@ class Waveform(pg.PlotWidget):
         self.addItem(self._title_label)
         self._vb.sigRangeChanged.connect(self.on_frame_moved)
         self._vb.sigTransformChanged.connect(self.on_frame_moved)
+        self._vb.sigTransformChanged.connect(self._update_labels)
 
         self.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
 
@@ -153,6 +154,26 @@ class Waveform(pg.PlotWidget):
         else:
             k = 'data'
         self._x_data, self._y_data = zip(*self._state[k][self._name])
+
+    def _update_labels(self):
+        if self.ty == "digital":
+            for i in range(len(self._x_data) - 1): 
+                x1, x2 = self._x_data[i], self._x_data[i+1]
+                lbl = self._labels[i]
+                bounds = lbl.boundingRect()
+                bounds_view = self._vb.mapSceneToView(bounds)
+                if bounds_view.boundingRect().width() < x2 - x1:
+                    lbl.setText(str(hex(self._y_data[i])))
+                else:
+                    lbl.setText("")
+
+    def _display_labels(self):
+        for x, y in zip(self._x_data, self._y_data): 
+            lbl = pg.TextItem(str(hex(y)), anchor=(0, 0.5))
+            self.addItem(lbl)
+            lbl.setPos(x, 0.5)
+            lbl.setTextWidth(40)
+            self._labels.append(lbl)
 
     def on_load_data(self):
         try:
@@ -180,6 +201,7 @@ class Waveform(pg.PlotWidget):
                     previous_y = y
                 mx_x = max(display_x)
                 self._pdi.setData(x=display_x, y=display_y)
+                self._display_labels()
             elif self.ty == 'analog':
                 self._pdi.setData(x=self._x_data, y=self._y_data)
                 mx = max(self._y_data)
