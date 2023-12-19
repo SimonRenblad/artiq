@@ -254,7 +254,7 @@ class Waveform(pg.PlotWidget):
     # override
     def mouseMoveEvent(self, e):
         if e.buttons() == QtCore.Qt.LeftButton \
-           and e.modifiers() != QtCore.Qt.NoModifier:
+           and e.modifiers() == QtCore.Qt.ControlModifier:
             drag = QtGui.QDrag(self)
             mime = QtCore.QMimeData()
             drag.setMimeData(mime)
