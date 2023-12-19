@@ -350,6 +350,10 @@ class WaveformChannel:
         self.current_time = current_time
 
     def set_value(self, value):
+        if value == "X":
+            value = None
+        else:
+            value = int(value, 2)
         self.data.append((self.current_time, value))
 
     def set_value_double(self, x):
@@ -804,7 +808,6 @@ def _decoded_dump_to_target_prelude(manager, devices, dump, uniform_interval):
     if isinstance(dump.messages[-1], StoppedMessage):
         m = dump.messages[-1]
         end_time = get_message_time(m)
-        manager.set_end_time(end_time)
         messages = dump.messages[:-1]
     else:
         logger.warning("StoppedMessage missing")
@@ -833,6 +836,9 @@ def _decoded_dump_to_target_prelude(manager, devices, dump, uniform_interval):
         start_time = get_message_time(m)
         if start_time:
             break
+
+    if end_time:
+        manager.set_end_time(end_time - start_time)
 
     return PreludeArgs(manager, channel_handlers, messages,
                        start_time, ref_period, slack, interval, timestamp)
