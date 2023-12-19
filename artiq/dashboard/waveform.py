@@ -91,13 +91,9 @@ class Waveform(pg.PlotWidget):
         self._is_log = is_log
 
         self._state = state
-        try:
-            if is_log:
-                self._x_data, self._y_data = zip(*self._state['logs'][self._name])
-            else:
-                self._x_data, self._y_data = zip(*self._state['data'][self._name])
-        except:
-            self._x_data, self._y_data = [], []
+        self._is_log = is_log
+        self._x_data = []
+        self._y_data = []
         self.ty = 'digital'
         self._symbol = "t"
         self._is_show_markers = False
@@ -151,20 +147,38 @@ class Waveform(pg.PlotWidget):
         title_pos = self._vb.mapSceneToView(QtCore.QPoint(0, self.height() // 2))
         self._cursor_label.setPos(value_pos)
         self._title_label.setPos(title_pos)
+    
+    def _get_data_from_state(self):
+        if self._is_log:
+            k = 'logs'
+        else:
+            k = 'data'
+        self._x_data, self._y_data = zip(*self._state[k][self._name])
 
     def on_load_data(self):
         try:
-            self._x_data, self._y_data = zip(*self._state['data'][self._name])
+            self._get_data_from_state()
             self._determine_channel_type()
             if self.ty == 'digital':             
                 display_x, display_y = [], []
+                previous_y = 0
                 for x, y in zip(self._x_data, self._y_data):
-                    if y is not None and y != 0 and self._width != 1:
-                        display_x += [x, x]
-                        display_y += [0, 1]
+                    state_unchanged = previous_y == y
+                    if state_unchanged:
+                        arw = pg.ArrowItem(pxMode=True, angle=90)
+                        self.addItem(arw)
+                        arw.setPos(x, 1)
+                        display_x.append(x)
+                        display_y.append(1)
+                    elif y is not None and y != 0:
+                            display_x += [x, x]
+                            display_y += [0, 1]
+                            display_x.append(x)
+                            display_y.append(1)
                     else:
                         display_x.append(x)
                         display_y.append(y)
+                    previous_y = y
                 mx_x = max(display_x)
                 self._pdi.setData(x=display_x, y=display_y)
             elif self.ty == 'analog':
@@ -175,14 +189,12 @@ class Waveform(pg.PlotWidget):
             elif self.ty == 'log':
                 self._pdi.setData(x=self._x_data, y=np.ones(len(self._x_data)))
         except:
+            logger.debug("load failed", exc_info=True)
             self._pdi.setData(x=[0], y=[0])
-            pass
 
     def _determine_channel_type(self):
         ty = type(self._y_data[0])
-        logger.info(ty)
         self.ty = {int: 'digital', str: 'log', float: 'analog', type(None): 'digital'}[ty]
-        logger.info(self.ty)
 
     def update_x_max(self):
         self._vb.setLimits(xMax=self._state["stopped_x"])
@@ -213,6 +225,8 @@ class Waveform(pg.PlotWidget):
         self._cursor_label.setText(lbl)
 
     def on_cursor_moved(self, x):
+        if len(self._x_data) < 1:
+            return
         self._cursor.setValue(x)
         ind = np.searchsorted(self._x_data, x, side="left") - 1
         dr = self._pdi.dataRect()
@@ -331,6 +345,7 @@ class WaveformArea(QtWidgets.QWidget):
         self._waveform_area.addWidget(cw)
         cw.on_load_data()
         cw.on_cursor_moved(self._cursor_x_pos)
+        cw.update_x_max()
 
     async def _get_channels_from_dialog(self):
         dialog = _AddChannelDialog(self, self._channels_mgr, "channels")
@@ -373,9 +388,6 @@ class WaveformArea(QtWidgets.QWidget):
         cw.deleteLater()
         self._waveform_area.setFixedHeight(num_channels * Waveform.PREF_HEIGHT)
         self._waveform_area.refresh()
-
-    def _update_xrange(self):
-        self._ref_axis.setLimits(xMax=maximum)
 
     def _clear_plots(self):
         for i in reversed(range(self._waveform_area.count())):
@@ -426,7 +438,7 @@ class WaveformProxyClient:
         try:
             if self.rpc_client.get_rpc_id()[0] is None:
                 raise AttributeError("Unable to identify RPC target. Is analyzer proxy connected?")
-            asyncio.ensure_future(self.rpc_client.request_dump())
+            asyncio.ensure_future(self.rpc_client.trigger())
         except Exception as e:
             logger.warning("Failed to pull from device: %s", e)
 
@@ -629,7 +641,13 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._state.update(trace)
         self.traceDataChanged.emit()
 
-    # File IO # TODO -> fix this
+    def on_dump_read(self, dump):
+        decoded_dump = comm_analyzer.decode_dump(dump)
+        ddb = self._state['ddb']
+        trace = comm_analyzer.decoded_dump_to_waveform(ddb, decoded_dump)
+        self._state.update(trace)
+        self.traceDataChanged.emit()
+
     async def open_trace(self):
         try:
             filename = await get_open_file_name(
@@ -643,6 +661,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         try:
             with open(filename, 'rb') as f:
                 dump = f.read()
+            self.on_dump_read(dump) 
         except Exception as e:
             logger.error("Failed to open analyzer trace: %s", e)
 
@@ -660,6 +679,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         try:
             with open(filename, 'wb') as f:
                 f.write(dump)
+
         except Exception as e:
             logger.error("Failed to save analyzer trace: %s", e)
 
