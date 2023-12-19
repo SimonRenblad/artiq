@@ -91,10 +91,14 @@ class Waveform(pg.PlotWidget):
         self._is_log = is_log
 
         self._state = state
-        if is_log:
-            self._data = self._state['logs']
-        else:
-            self._data = self._state['data']
+        try:
+            if is_log:
+                self._x_data, self._y_data = zip(*self._state['logs'][self._name])
+            else:
+                self._x_data, self._y_data = zip(*self._state['data'][self._name])
+        except:
+            self._x_data, self._y_data = [], []
+        self.ty = 'digital'
         self._symbol = "t"
         self._is_show_markers = False
         self._is_show_cursor = True
@@ -126,37 +130,59 @@ class Waveform(pg.PlotWidget):
         self._vb.setLimits(xMin=0)
 
         self._pi.hideAxis("left")
-        #self._left_ax = self._pi.getAxis("left")
-        #self._left_ax.enableAutoSIPrefix(enable=False)
-        #self._left_ax.setWidth(20)
-        #self._left_ax.setStyle()
-        if self._width == 1:
-            self._pi.setRange(yRange=(0, 1), padding=0.1)
-            #self._left_ax.setTicks([[(0, "0"), (1, "1")], []])
-            self._vb.setLimits(yMin=0, yMax=1)
-
-        self._legend = self.addLegend(offset=(1, 1))
-        self._legend.addItem(self._pdi, self._name)
+        self._pi.setRange(yRange=(0, 1), padding=0.1)
 
         self._cursor = pg.InfiniteLine()
-        self._cursor_label = pg.InfLineLabel(self._cursor, text='0')
-        self._cursor_y = None
+        self._cursor_y = 0
         self.addItem(self._cursor)
+
+        self._cursor_label = pg.TextItem("test")
+        self.addItem(self._cursor_label)
+
+        self._title_label = pg.TextItem(self._name)
+        self.addItem(self._title_label)
+        self._vb.sigRangeChanged.connect(self.on_frame_moved)
+        self._vb.sigTransformChanged.connect(self.on_frame_moved)
 
         self.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
 
+    def on_frame_moved(self):
+        value_pos = self._vb.mapSceneToView(QtCore.QPoint(0, 0))
+        title_pos = self._vb.mapSceneToView(QtCore.QPoint(0, self.height() // 2))
+        self._cursor_label.setPos(value_pos)
+        self._title_label.setPos(title_pos)
+
     def on_load_data(self):
-        data = self._data[self._name]
-        for t, val in data:
-            lbl = pg.TextItem(anchor=(0, 1))
-            arw = pg.ArrowItem(angle=270, pxMode=True, headLen=5, tailLen=15, tailWidth=1)
-            self.addItem(lbl)
-            self.addItem(arw)
-            lbl.setPos(t, 0)
-            lbl.setText(val)
-            arw.setPos(t, 0)
-            self._logs.append(lbl)
-            self._logs.append(arw)
+        try:
+            self._x_data, self._y_data = zip(*self._state['data'][self._name])
+            self._determine_channel_type()
+            if self.ty == 'digital':             
+                display_x, display_y = [], []
+                for x, y in zip(self._x_data, self._y_data):
+                    if y is not None and y != 0 and self._width != 1:
+                        display_x += [x, x]
+                        display_y += [0, 1]
+                    else:
+                        display_x.append(x)
+                        display_y.append(y)
+                mx_x = max(display_x)
+                self._pdi.setData(x=display_x, y=display_y)
+            elif self.ty == 'analog':
+                self._pdi.setData(x=self._x_data, y=self._y_data)
+                mx = max(self._y_data)
+                mn = min(self._y_data)
+                self._pi.setRange(yRange=(mn, mx), padding=0.1)
+            elif self.ty == 'log':
+                self._pdi.setData(x=self._x_data, y=np.ones(len(self._x_data)))
+        except:
+            self._pdi.setData(x=[0], y=[0])
+            pass
+
+    def _determine_channel_type(self):
+        ty = type(self._y_data[0])
+        logger.info(ty)
+        self.ty = {int: 'digital', str: 'log', float: 'analog', type(None): 'digital'}[ty]
+        logger.info(self.ty)
 
     def update_x_max(self):
         self._vb.setLimits(xMax=self._state["stopped_x"])
@@ -178,22 +204,23 @@ class Waveform(pg.PlotWidget):
             self._is_show_markers = True
 
     def _refresh_cursor_label(self):
-        try:
-            lbl = get_format_waveform_value(self._cursor_y, self._width, self._data_format)
-            self._cursor_label.setText(lbl)
-        except Exception as e:
-            logger.debug(e)
-            self._cursor_label.setText("err")
+        if self.ty == 'digital':
+            lbl = str(hex(self._cursor_y))
+        elif self.ty == 'analog':
+            lbl = str(self._cursor_y)
+        else: 
+            lbl = ""
+        self._cursor_label.setText(lbl)
 
     def on_cursor_moved(self, x):
         self._cursor.setValue(x)
-        ind = np.searchsorted(self._pdi.xData, x, side="left") - 1
+        ind = np.searchsorted(self._x_data, x, side="left") - 1
         dr = self._pdi.dataRect()
         if dr is not None and dr.left() <= x <= dr.right() \
-                and 0 <= ind < len(self._pdi.yData):
-            self._cursor_y = self._pdi.yData[ind]
+                and 0 <= ind < len(self._y_data):
+            self._cursor_y = self._y_data[ind]
         else:
-            self._cursor_y = None
+            self._cursor_y = 0
         self._refresh_cursor_label()
 
     # override
@@ -245,11 +272,6 @@ class WaveformArea(QtWidgets.QWidget):
         self._ref_axis.setMenuEnabled(False)
         top = pg.AxisItem("top")
         top.setLabel("", units="s")
-        #left = pg.AxisItem("left")
-        #left.setStyle(textFillLimits=(0, 0))
-        #left.setFixedHeight(0)
-        #left.setWidth(20)
-        #self._ref_axis.setAxisItems({"top": top, "left": left})
         self._ref_axis.setAxisItems({"top": top})
 
         self._ref_vb = self._ref_axis.getPlotItem().getViewBox()
