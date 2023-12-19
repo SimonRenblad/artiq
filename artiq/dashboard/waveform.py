@@ -91,7 +91,6 @@ class Waveform(pg.PlotWidget):
         self._is_log = is_log
 
         self._state = state
-        self._is_log = is_log
         self._x_data = []
         self._y_data = []
         self.ty = 'digital'
@@ -188,6 +187,21 @@ class Waveform(pg.PlotWidget):
                 self._pi.setRange(yRange=(mn, mx), padding=0.1)
             elif self.ty == 'log':
                 self._pdi.setData(x=self._x_data, y=np.ones(len(self._x_data)))
+                self._pdi.opts.update({"connect": np.zeros(2), "symbol": "x"})
+                old_msg = ""
+                old_x = 0
+                for x, msg in zip(self._x_data, self._y_data):
+                    if x == old_x: 
+                        old_msg += "\n" + msg
+                    else:
+                        lbl = pg.TextItem(old_msg)
+                        self.addItem(lbl)
+                        lbl.setPos(old_x, 1)
+                        old_msg = msg
+                        old_x = x
+                lbl = pg.TextItem(old_msg)
+                self.addItem(lbl)
+                lbl.setPos(old_x, 1)
         except:
             logger.debug("load failed", exc_info=True)
             self._pdi.setData(x=[0], y=[0])
