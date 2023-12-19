@@ -131,7 +131,7 @@ class Waveform(pg.PlotWidget):
         self._cursor_y = 0
         self.addItem(self._cursor)
 
-        self._cursor_label = pg.TextItem("test")
+        self._cursor_label = pg.TextItem()
         self.addItem(self._cursor_label)
 
         self._title_label = pg.TextItem(self._name)
@@ -239,9 +239,9 @@ class Waveform(pg.PlotWidget):
         self._cursor_label.setText(lbl)
 
     def on_cursor_moved(self, x):
+        self._cursor.setValue(x)
         if len(self._x_data) < 1:
             return
-        self._cursor.setValue(x)
         ind = np.searchsorted(self._x_data, x, side="left") - 1
         dr = self._pdi.dataRect()
         if dr is not None and dr.left() <= x <= dr.right() \
