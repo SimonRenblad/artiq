@@ -80,32 +80,27 @@ class Waveform(pg.PlotWidget):
 
     cursorMoved = QtCore.pyqtSignal(float)
 
-    def __init__(self, channel, state, parent=None, is_log=False):
+    def __init__(self, channel, state, parent=None):
         pg.PlotWidget.__init__(self, parent=parent, x=None, y=None)
         self.setMinimumHeight(Waveform.MIN_HEIGHT)
         self.setMaximumHeight(Waveform.MAX_HEIGHT)
         self.setMenuEnabled(False)
 
-        self._name = channel[0]
-        self._width = channel[1]
-        self._is_log = is_log
+        self.name = channel[0]
+        self.width = channel[1][0]
 
-        self._state = state
-        self._x_data = []
-        self._y_data = []
-        self.ty = 'digital'
-        self._symbol = "t"
-        self._labels = []
-        self._is_show_markers = False
+        self.state = state
+        self.x_data = []
+        self.y_data = []
         self._is_show_cursor = True
 
-        self._pi = self.getPlotItem()
-        self._pi.setRange(yRange=(0, 1), padding=0.1)
-        self._pi.hideButtons()
-        self._pi.getAxis("bottom").setStyle(showValues=False, tickLength=0)
-        self._pi.hideAxis("top")
+        self.plotItem = self.getPlotItem()
+        self.plotItem.setRange(yRange=(0, 1), padding=0.1)
+        self.plotItem.hideButtons()
+        self.plotItem.getAxis("bottom").setStyle(showValues=False, tickLength=0)
+        self.plotItem.hideAxis("top")
 
-        self._pdi = self._pi.listDataItems()[0]
+        self.plotDataItem = self.plotItem.listDataItems()[0]
         pdi_opts = {
             "pen": "r",
             "stepMode": "right",
@@ -117,161 +112,65 @@ class Waveform(pg.PlotWidget):
             "symbolPen": "r",
             "symbolBrush": "r"
         }
-        self._pdi.opts.update(pdi_opts)
+        self.plotDataItem.opts.update(pdi_opts)
 
-        self._vb = self._pi.getViewBox()
-        self._vb.setMouseEnabled(x=True, y=False)
-        self._vb.disableAutoRange(axis=pg.ViewBox.YAxis)
-        self._vb.setLimits(xMin=0)
+        self.viewBox = self.plotItem.getViewBox()
+        self.viewBox.setMouseEnabled(x=True, y=False)
+        self.viewBox.disableAutoRange(axis=pg.ViewBox.YAxis)
+        self.viewBox.setLimits(xMin=0)
 
-        self._pi.hideAxis("left")
-        self._pi.setRange(yRange=(0, 1), padding=0.1)
+        self.plotItem.getAxis("left").setStyle(showValues=False, tickLength=0)
+        self.plotItem.setRange(yRange=(0, 1), padding=0.1)
 
-        self._cursor = pg.InfiniteLine()
-        self._cursor_y = 0
-        self.addItem(self._cursor)
+        self.cursor = pg.InfiniteLine()
+        self.cursorY = 0
+        self.addItem(self.cursor)
 
-        self._cursor_label = pg.TextItem()
-        self.addItem(self._cursor_label)
+        self.cursor_label = pg.TextItem()
+        self.addItem(self.cursor_label)
 
-        self._title_label = pg.TextItem(self._name)
-        self.addItem(self._title_label)
-        self._vb.sigRangeChanged.connect(self.on_frame_moved)
-        self._vb.sigTransformChanged.connect(self.on_frame_moved)
-        self._vb.sigTransformChanged.connect(self._update_labels)
+        self.title_label = pg.TextItem(self.name)
+        self.addItem(self.title_label)
+        self.viewBox.sigRangeChanged.connect(self.on_frame_moved)
+        self.viewBox.sigTransformChanged.connect(self.on_frame_moved)
 
         self.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
 
     def on_frame_moved(self):
-        value_pos = self._vb.mapSceneToView(QtCore.QPoint(0, 0))
-        title_pos = self._vb.mapSceneToView(QtCore.QPoint(0, self.height() // 2))
-        self._cursor_label.setPos(value_pos)
-        self._title_label.setPos(title_pos)
-    
-    def _get_data_from_state(self):
-        if self._is_log:
-            k = 'logs'
-        else:
-            k = 'data'
-        self._x_data, self._y_data = zip(*self._state[k][self._name])
-
-    def _update_labels(self):
-        if self.ty == "digital":
-            for i in range(len(self._x_data) - 1): 
-                x1, x2 = self._x_data[i], self._x_data[i+1]
-                lbl = self._labels[i]
-                bounds = lbl.boundingRect()
-                bounds_view = self._vb.mapSceneToView(bounds)
-                if bounds_view.boundingRect().width() < x2 - x1:
-                    lbl.setText(str(hex(self._y_data[i])))
-                else:
-                    lbl.setText("")
-
-    def _display_labels(self):
-        for x, y in zip(self._x_data, self._y_data): 
-            lbl = pg.TextItem(str(hex(y)), anchor=(0, 0.5))
-            self.addItem(lbl)
-            lbl.setPos(x, 0.5)
-            lbl.setTextWidth(40)
-            self._labels.append(lbl)
-
-    def on_load_data(self):
-        try:
-            self._get_data_from_state()
-            self._determine_channel_type()
-            if self.ty == 'digital':             
-                display_x, display_y = [], []
-                previous_y = 0
-                for x, y in zip(self._x_data, self._y_data):
-                    state_unchanged = previous_y == y
-                    if state_unchanged:
-                        arw = pg.ArrowItem(pxMode=True, angle=90)
-                        self.addItem(arw)
-                        arw.setPos(x, 1)
-                        display_x.append(x)
-                        display_y.append(1)
-                    elif y is not None and y != 0:
-                            display_x += [x, x]
-                            display_y += [0, 1]
-                            display_x.append(x)
-                            display_y.append(1)
-                    else:
-                        display_x.append(x)
-                        display_y.append(y)
-                    previous_y = y
-                mx_x = max(display_x)
-                self._pdi.setData(x=display_x, y=display_y)
-                self._display_labels()
-            elif self.ty == 'analog':
-                self._pdi.setData(x=self._x_data, y=self._y_data)
-                mx = max(self._y_data)
-                mn = min(self._y_data)
-                self._pi.setRange(yRange=(mn, mx), padding=0.1)
-            elif self.ty == 'log':
-                self._pdi.setData(x=self._x_data, y=np.ones(len(self._x_data)))
-                self._pdi.opts.update({"connect": np.zeros(2), "symbol": "x"})
-                old_msg = ""
-                old_x = 0
-                for x, msg in zip(self._x_data, self._y_data):
-                    if x == old_x: 
-                        old_msg += "\n" + msg
-                    else:
-                        lbl = pg.TextItem(old_msg)
-                        self.addItem(lbl)
-                        lbl.setPos(old_x, 1)
-                        old_msg = msg
-                        old_x = x
-                lbl = pg.TextItem(old_msg)
-                self.addItem(lbl)
-                lbl.setPos(old_x, 1)
-        except:
-            logger.debug("load failed", exc_info=True)
-            self._pdi.setData(x=[0], y=[0])
-
-    def _determine_channel_type(self):
-        ty = type(self._y_data[0])
-        self.ty = {int: 'digital', str: 'log', float: 'analog', type(None): 'digital'}[ty]
+        value_pos = self.viewBox.mapSceneToView(QtCore.QPoint(0, 0))
+        title_pos = self.viewBox.mapSceneToView(QtCore.QPoint(0, self.height() // 2))
+        self.cursor_label.setPos(value_pos)
+        self.title_label.setPos(title_pos)
 
     def update_x_max(self):
-        self._vb.setLimits(xMax=self._state["stopped_x"])
+        self.viewBox.setLimits(xMax=self.state["stopped_x"])
 
     def on_set_cursor_visible(self, visible):
         if visible:
-            self.removeItem(self._cursor)
+            self.removeItem(self.cursor)
             self._is_show_cursor = False
         else:
-            self.addItem(self._cursor)
+            self.addItem(self.cursor)
             self._is_show_cursor = True
 
-    def on_toggle_markers(self):
-        if self._is_show_markers:
-            self._pdi.setSymbol(None)
-            self._is_show_markers = False
-        else:
-            self._pdi.setSymbol(self._symbol)
-            self._is_show_markers = True
-
-    def _refresh_cursor_label(self):
-        if self.ty == 'digital':
-            lbl = str(hex(self._cursor_y))
-        elif self.ty == 'analog':
-            lbl = str(self._cursor_y)
-        else: 
-            lbl = ""
-        self._cursor_label.setText(lbl)
-
     def on_cursor_moved(self, x):
-        self._cursor.setValue(x)
-        if len(self._x_data) < 1:
+        self.cursor.setValue(x)
+        if len(self.x_data) < 1:
             return
-        ind = np.searchsorted(self._x_data, x, side="left") - 1
-        dr = self._pdi.dataRect()
+        ind = np.searchsorted(self.x_data, x, side="left") - 1
+        dr = self.plotDataItem.dataRect()
         if dr is not None and dr.left() <= x <= dr.right() \
-                and 0 <= ind < len(self._y_data):
-            self._cursor_y = self._y_data[ind]
+                and 0 <= ind < len(self.y_data):
+            self.cursorY = self.y_data[ind]
         else:
-            self._cursor_y = 0
-        self._refresh_cursor_label()
+            self.cursorY = 0
+        self.refresh_cursor_label()
+
+    def on_load_data(self):
+        raise NotImplementedError
+
+    def refresh_cursor_label(self):
+        raise NotImplementedError
 
     # override
     def mouseMoveEvent(self, e):
@@ -288,13 +187,138 @@ class Waveform(pg.PlotWidget):
 
     # override
     def mouseDoubleClickEvent(self, e):
-        pos = self._vb.mapSceneToView(e.pos())
+        pos = self.viewBox.mapSceneToView(e.pos())
         self.cursorMoved.emit(pos.x())
 
     # override
     def wheelEvent(self, e):
         if e.modifiers() & QtCore.Qt.ShiftModifier:
             super().wheelEvent(e)
+
+
+class LogWaveform(Waveform):
+    def __init__(self, channel, state, parent=None):
+        Waveform.__init__(self, channel, state, parent)
+
+    def on_load_data(self):
+        try:
+            self.x_data, self.y_data = zip(*self.state['logs'][self.name])
+            self.plotDataItem.setData(x=self.x_data, y=np.ones(len(self.x_data)))
+            self.plotDataItem.opts.update({"connect": np.zeros(2), "symbol": "x"})
+            old_msg = ""
+            old_x = 0
+            for x, msg in zip(self.x_data, self.y_data):
+                if x == old_x: 
+                    old_msg += "\n" + msg
+                else:
+                    lbl = pg.TextItem(old_msg)
+                    self.addItem(lbl)
+                    lbl.setPos(old_x, 1)
+                    old_msg = msg
+                    old_x = x
+            lbl = pg.TextItem(old_msg)
+            self.addItem(lbl)
+            lbl.setPos(old_x, 1)
+        except:
+            logger.debug('unable to load data', exc_info=True)
+            self.plotDataItem.setData(x=[0], y=[0])
+
+    def refresh_cursor_label(self):
+        self.cursor_label.setText("")
+
+
+class TTLWaveform(Waveform):
+    def __init__(self, channel, state, parent=None):
+        Waveform.__init__(self, channel, state, parent)
+
+    def on_load_data(self):
+        try:
+            self.x_data, self.y_data = zip(*self.state['data'][self.name])
+            display_x, display_y = [], []
+            previous_y = 0
+            for x, y in zip(self.x_data, self.y_data):
+                state_unchanged = previous_y == y
+                if state_unchanged:
+                    arw = pg.ArrowItem(pxMode=True, angle=90)
+                    self.addItem(arw)
+                    arw.setPos(x, 1)
+                previous_y = y
+            self.plotDataItem.setData(x=self.x_data, y=self.y_data)
+        except:
+            logger.debug('unable to load data', exc_info=True)
+            self.plotDataItem.setData(x=[0], y=[0])
+
+    def refresh_cursor_label(self):
+        lbl = str(self.cursorY)
+        self.cursor_label.setText(lbl)
+
+
+class DigitalWaveform(Waveform):
+    def __init__(self, channel, state, parent=None):
+        Waveform.__init__(self, channel, state, parent)
+        self._labels = []
+        self.viewBox.sigTransformChanged.connect(self._update_labels)
+        self.plotDataItem.opts.update({"downsample": 1, "autoDownsample": False})
+        self._secondaryDataItem = self.plotItem.plot(x=[], y=[], pen='r')
+
+    def _update_labels(self):
+        for i in range(len(self.x_data) - 1): 
+            x1, x2 = self.x_data[i], self.x_data[i+1]
+            lbl = self._labels[i]
+            bounds = lbl.boundingRect()
+            bounds_view = self.viewBox.mapSceneToView(bounds)
+            if bounds_view.boundingRect().width() < x2 - x1:
+                lbl.setText(str(hex(self.y_data[i])))
+            else:
+                lbl.setText("\n\n+")
+
+    def on_load_data(self):
+        try:
+            self.x_data, self.y_data = zip(*self.state['data'][self.name])
+            display_x, display_y = [], []
+            for x, y in zip(self.x_data, self.y_data):
+                if y is not None and y != 0:
+                        display_x += [x, x]
+                        display_y += [0, 1]
+                        display_x.append(x)
+                        display_y.append(1)
+                else:
+                    display_x.append(x)
+                    display_y.append(y)
+                lbl = pg.TextItem(str(hex(y)), anchor=(0, 0.5))
+                self.addItem(lbl)
+                lbl.setPos(x, 0.5)
+                lbl.setTextWidth(100)
+                self._labels.append(lbl)
+            self.plotDataItem.setData(x=display_x, y=display_y)
+            self._secondaryDataItem.setData(x=[self.x_data[0], self.x_data[-1]], y=[0, 0])
+        except:
+            logger.debug('unable to load data', exc_info=True)
+            self.plotDataItem.setData(x=[0], y=[0])
+
+    def refresh_cursor_label(self):
+        lbl = str(hex(self.cursorY))
+        self.cursor_label.setText(lbl)
+
+
+class AnalogWaveform(Waveform):
+    def __init__(self, channel, state, parent=None):
+        Waveform.__init__(self, channel, state, parent)
+
+    def on_load_data(self):
+        try:
+            self.x_data, self.y_data = zip(*self.state['data'][self.name])
+            self.plotDataItem.setData(x=self.x_data, y=self.y_data)
+            mx = max(self.y_data)
+            mn = min(self.y_data)
+            self.plotItem.setRange(yRange=(mn, mx), padding=0.1)
+        except:
+            logger.debug('unable to load data', exc_info=True)
+            self.plotDataItem.setData(x=[0], y=[0])
+
+    def refresh_cursor_label(self):
+        lbl = str(self.cursorY)
+        self.cursor_label.setText(lbl)
 
 
 class WaveformArea(QtWidgets.QWidget):
@@ -343,16 +367,6 @@ class WaveformArea(QtWidgets.QWidget):
         layout.addWidget(scroll_area)
 
     def _add_waveform_actions(self, waveform):
-        action = QtWidgets.QAction("Show message markers", waveform)
-        action.setCheckable(True)
-        action.setChecked(False)
-        action.triggered.connect(waveform.on_toggle_markers)
-        waveform.addAction(action)
-
-        action = QtWidgets.QAction(waveform)
-        action.setSeparator(True)
-        waveform.addAction(action)
-
         action = QtWidgets.QAction("Toggle cursor visible", waveform)
         action.triggered.connect(self._on_toggle_cursor)
         waveform.addAction(action)
@@ -369,10 +383,10 @@ class WaveformArea(QtWidgets.QWidget):
         action.triggered.connect(self._waveform_area.resetSizes)
         waveform.addAction(action)
 
-    def _add_plot(self, channel, is_log):
+    def _add_plot(self, channel, waveform_type):
         num_channels = self._waveform_area.count()
         self._waveform_area.setFixedHeight((num_channels + 1) * Waveform.PREF_HEIGHT)
-        cw = Waveform(channel, self._state, parent=self._waveform_area, is_log=is_log)
+        cw = waveform_type(channel, self._state, parent=self._waveform_area)
         cw.cursorMoved.connect(lambda x: self.on_cursor_moved(x))
         cw.cursorMoved.connect(self.cursorMoved.emit)
         self._add_waveform_actions(cw)
@@ -383,41 +397,39 @@ class WaveformArea(QtWidgets.QWidget):
         cw.on_cursor_moved(self._cursor_x_pos)
         cw.update_x_max()
 
-    async def _get_channels_from_dialog(self):
-        dialog = _AddChannelDialog(self, self._channels_mgr, "channels")
+    async def _add_plots_dialog_task(self, manager, title, is_log):
+        dialog = _AddChannelDialog(self, manager, title)
         fut = asyncio.Future()
 
         def on_accept(s):
             fut.set_result(s)
         dialog.accepted.connect(on_accept)
         dialog.open()
-        return await fut
-
-    async def _add_plots_dialog_task(self):
-        channels = await self._get_channels_from_dialog()
-        for channel in channels:
-            self._add_plot(channel, is_log=False)
+        channels = await fut
+        if is_log:
+            for channel in channels:
+                self._add_plot(channel, LogWaveform)
+        else:
+            for channel in channels:
+                ty = channel[1][1]
+                waveform_type = {
+                    "ttl": TTLWaveform,
+                    "digital": DigitalWaveform,
+                    "analog": AnalogWaveform
+                }[ty]
+                self._add_plot(channel, waveform_type)
 
     def add_plots_dialog(self):
-        asyncio.ensure_future(exc_to_warning(self._add_plots_dialog_task()))
-
-    async def _get_log_channels_from_dialog(self):
-        dialog = _AddChannelDialog(self, self._log_channels_mgr, "logs")
-        fut = asyncio.Future()
-
-        def on_accept(s):
-            fut.set_result(s)
-        dialog.accepted.connect(on_accept)
-        dialog.open()
-        return await fut
-
-    async def _add_log_plots_dialog_task(self):
-        channels = await self._get_log_channels_from_dialog()
-        for channel in channels:
-            self._add_plot(channel, is_log=True)
+        args = [self._channels_mgr,
+                "channels",
+                False]
+        asyncio.ensure_future(exc_to_warning(self._add_plots_dialog_task(*args)))
 
     def add_log_plots_dialog(self):
-        asyncio.ensure_future(exc_to_warning(self._add_log_plots_dialog_task()))
+        args = [self._log_channels_mgr,
+                "logs",
+                True]
+        asyncio.ensure_future(exc_to_warning(self._add_plots_dialog_task(*args)))
 
     def _remove_plot(self, cw):
         num_channels = self._waveform_area.count() - 1
@@ -470,7 +482,7 @@ class WaveformProxyClient:
         self._reconnect_rpc_task = None
         self._reconnect_receiver_task = None
 
-    async def request_dump_task(self):
+    async def trigger_proxy_task(self):
         try:
             if self.rpc_client.get_rpc_id()[0] is None:
                 raise AttributeError("Unable to identify RPC target. Is analyzer proxy connected?")
@@ -625,7 +637,7 @@ class WaveformDock(QtWidgets.QDockWidget):
                 QtWidgets.QStyle.SP_BrowserReload))
         grid.addWidget(self._request_dump_btn, 0, 1)
         self._request_dump_btn.clicked.connect(
-            lambda: asyncio.ensure_future(self.proxy_client.request_dump_task()))
+            lambda: asyncio.ensure_future(self.proxy_client.trigger_proxy_task()))
 
         self._waveform_area = WaveformArea(self, self._state,
                                            self._channels_mgr,
