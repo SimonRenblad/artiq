@@ -159,11 +159,13 @@ class Waveform(pg.PlotWidget):
             return
         ind = np.searchsorted(self.x_data, x, side="left") - 1
         dr = self.plotDataItem.dataRect()
-        if dr is not None and dr.left() <= x <= dr.right() \
+        if dr is not None and dr.left() <= x \
                 and 0 <= ind < len(self.y_data):
             self.cursorY = self.y_data[ind]
+        elif x >= dr.right():
+            self.cursorY = self.y_data[-1]
         else:
-            self.cursorY = 0
+            self.cursorY = None
         self.refresh_cursor_label()
 
     def on_load_data(self):
@@ -234,7 +236,7 @@ class TTLWaveform(Waveform):
     def on_load_data(self):
         try:
             self.x_data, self.y_data = zip(*self.state['data'][self.name])
-            display_x, display_y = [], []
+            stopped_x = self.state["stopped_x"]
             previous_y = 0
             for x, y in zip(self.x_data, self.y_data):
                 state_unchanged = previous_y == y
@@ -243,13 +245,19 @@ class TTLWaveform(Waveform):
                     self.addItem(arw)
                     arw.setPos(x, 1)
                 previous_y = y
-            self.plotDataItem.setData(x=self.x_data, y=self.y_data)
+            logger.info(self.y_data)
+            display_y = [0.5] + list(self.y_data) + [self.y_data[-1]]
+            display_x = [0] + list(self.x_data) + [stopped_x]
+            self.plotDataItem.setData(x=display_x, y=display_y)
         except:
-            logger.debug('unable to load data', exc_info=True)
+            logger.info('unable to load data', exc_info=True)
             self.plotDataItem.setData(x=[0], y=[0])
 
     def refresh_cursor_label(self):
-        lbl = str(self.cursorY)
+        if self.cursorY is None:
+            lbl = "x"
+        else:
+            lbl = str(self.cursorY)
         self.cursor_label.setText(lbl)
 
 
@@ -276,6 +284,7 @@ class DigitalWaveform(Waveform):
         try:
             self.x_data, self.y_data = zip(*self.state['data'][self.name])
             display_x, display_y = [], []
+            stopped_x = self.state["stopped_x"]
             for x, y in zip(self.x_data, self.y_data):
                 if y is not None and y != 0:
                         display_x += [x, x]
@@ -290,14 +299,19 @@ class DigitalWaveform(Waveform):
                 lbl.setPos(x, 0.5)
                 lbl.setTextWidth(100)
                 self._labels.append(lbl)
+            display_y.append(y)
+            display_x.append(stopped_x)
             self.plotDataItem.setData(x=display_x, y=display_y)
-            self._secondaryDataItem.setData(x=[self.x_data[0], self.x_data[-1]], y=[0, 0])
+            self._secondaryDataItem.setData(x=[self.x_data[0], stopped_x], y=[0, 0])
         except:
             logger.debug('unable to load data', exc_info=True)
             self.plotDataItem.setData(x=[0], y=[0])
 
     def refresh_cursor_label(self):
-        lbl = str(hex(self.cursorY))
+        if self.cursorY is None:
+            lbl = "X"
+        else:
+            lbl = str(hex(self.cursorY))
         self.cursor_label.setText(lbl)
 
 
@@ -317,7 +331,10 @@ class AnalogWaveform(Waveform):
             self.plotDataItem.setData(x=[0], y=[0])
 
     def refresh_cursor_label(self):
-        lbl = str(self.cursorY)
+        if self.cursorY is None:
+            lbl = "nan"
+        else:
+            lbl = str(self.cursorY)
         self.cursor_label.setText(lbl)
 
 
