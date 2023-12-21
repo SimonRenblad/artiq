@@ -599,7 +599,7 @@ class SPIMaster2Handler(WishboneHandler):
         self.channels = {}
         self.scope = "spi2"
         with manager.scope("spi2", name):
-            self.stb = manager.get_channel(name + "/stb", 1, ty="ttl")
+            self.stb = manager.get_channel(name + "/stb", 1, ty="bit")
             for reg_name, reg_width in [
                     ("flags", 8),
                     ("length", 5),
