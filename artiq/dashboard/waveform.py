@@ -159,7 +159,9 @@ class Waveform(pg.PlotWidget):
             return
         ind = np.searchsorted(self.x_data, x, side="left") - 1
         dr = self.plotDataItem.dataRect()
-        if dr is not None and dr.left() <= x \
+        if dr is None:
+            self.cursorY = None
+        elif dr.left() <= x \
                 and 0 <= ind < len(self.y_data):
             self.cursorY = self.y_data[ind]
         elif x >= dr.right():
@@ -232,6 +234,7 @@ class LogWaveform(Waveform):
 class BitWaveform(Waveform):
     def __init__(self, channel, state, parent=None):
         Waveform.__init__(self, channel, state, parent)
+        self._arrows = []
 
     def on_load_data(self):
         try:
@@ -247,6 +250,7 @@ class BitWaveform(Waveform):
                 elif state_unchanged:
                     arw = pg.ArrowItem(pxMode=True, angle=90)
                     self.addItem(arw)
+                    self._arrows.append(arw)
                     arw.setPos(x, 1)
                 display_y.append(y)
                 display_x.append(x)
@@ -256,7 +260,9 @@ class BitWaveform(Waveform):
             self.plotDataItem.setData(x=display_x, y=display_y)
         except:
             logger.info('unable to load data', exc_info=True)
-            self.plotDataItem.setData(x=[0], y=[0])
+            for arw in self._arrows:
+                self.plotItem.removeItem(arw)
+            self.plotDataItem.setData(x=[], y=[])
 
     def refresh_cursor_label(self):
         if self.cursorY is None:
@@ -288,14 +294,14 @@ class BitVectorWaveform(Waveform):
     def on_load_data(self):
         try:
             self.x_data, self.y_data = zip(*self.state['data'][self.name])
-            display_x, display_y = [], []
+            display_x, display_y = [0], [0.5]
             stopped_x = self.state["stopped_x"]
             for x, y in zip(self.x_data, self.y_data):
                 if y is not None and y != 0:
-                        display_x.append(x)
-                        display_y.append(0)
-                        display_x.append(x)
-                        display_y.append(1)
+                    display_x.append(x)
+                    display_y.append(0)
+                    display_x.append(x)
+                    display_y.append(1)
                 else:
                     display_x.append(x)
                     display_y.append(y)
@@ -310,6 +316,8 @@ class BitVectorWaveform(Waveform):
             self._secondaryDataItem.setData(x=[self.x_data[0], stopped_x], y=[0, 0])
         except:
             logger.debug('unable to load data', exc_info=True)
+            for lbl in self._labels:
+                self.plotItem.removeItem(lbl)
             self.plotDataItem.setData(x=[0], y=[0])
 
     def refresh_cursor_label(self):
@@ -629,7 +637,6 @@ class WaveformDock(QtWidgets.QDockWidget):
             "logs": dict(),
             "data": dict(),
             "dump": None,
-            "decoded_dump": None,
             "ddb": dict(),
         }
 
@@ -709,6 +716,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         ddb = self._state['ddb']
         trace = comm_analyzer.decoded_dump_to_waveform(ddb, decoded_dump)
         self._state.update(trace)
+        self._state['dump'] = args # tuple
         self.traceDataChanged.emit()
 
     def on_dump_read(self, dump):
@@ -716,7 +724,24 @@ class WaveformDock(QtWidgets.QDockWidget):
         ddb = self._state['ddb']
         trace = comm_analyzer.decoded_dump_to_waveform(ddb, decoded_dump)
         self._state.update(trace)
+        self._state['dump'] = dump # bytes
         self.traceDataChanged.emit()
+
+    def _decode_dump(self):
+        dump = self._state['dump']
+        if isinstance(dump, tuple):
+            header = comm_analyzer.decode_header_from_receiver(*dump)
+            return comm_analyzer.decode_dump_loop(*header)
+        else:
+            return comm_analyzer.decode_dump(dump)
+
+    def _dump_header(self, endian, payload_length):
+        payload_length_word = struct.pack(endian + "I", payload_length)
+        if endian == ">":
+            endian_byte = b"E"
+        else:
+            endian_byte = b"e"
+        return endian_byte + payload_length_word
 
     async def open_trace(self):
         try:
@@ -748,14 +773,18 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._current_dir = os.path.dirname(filename)
         try:
             with open(filename, 'wb') as f:
-                f.write(dump)
+                if isinstance(dump, tuple):
+                    f.write(self._dump_header(dump[0], dump[1]))
+                    f.write(dump[2])
+                else:
+                    f.write(dump)
 
         except Exception as e:
             logger.error("Failed to save analyzer trace: %s", e)
 
     async def save_vcd(self):
         ddb = self._state["ddb"]
-        decoded_dump = self._state["decoded_dump"]
+        dump = self._state["dump"]
         try:
             filename = await get_save_file_name(
                 self,
@@ -767,7 +796,8 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._current_dir = os.path.dirname(filename)
         try:
             with open(filename, 'w') as f:
-                await comm_analyer.async_decoded_dump_to_vcd(f, ddb, decoded_dump)
+                decoded_dump = comm_analyzer.decode_dump(data)
+                comm_analyzer.decoded_dump_to_vcd(f, ddb, decoded_dump)
         except Exception as e:
             logger.error("Faile to save as VCD: %s", e)
         finally:
