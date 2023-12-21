@@ -17,6 +17,7 @@ import pyqtgraph as pg
 import asyncio
 import logging
 import time
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -277,8 +278,10 @@ class BitVectorWaveform(Waveform):
         Waveform.__init__(self, channel, state, parent)
         self._labels = []
         self.viewBox.sigTransformChanged.connect(self._update_labels)
-        self.plotDataItem.opts.update({"downsample": 1, "autoDownsample": False})
+        #self.plotDataItem.opts.update({"downsample": 1, "autoDownsample": False})
         self._secondaryDataItem = self.plotItem.plot(x=[], y=[], pen='r')
+        hx = math.ceil(self.width / 4)
+        self._format_string = "{:0=" + str(hx) + "X}"
 
     def _update_labels(self):
         for i in range(len(self.x_data) - 1): 
@@ -287,9 +290,9 @@ class BitVectorWaveform(Waveform):
             bounds = lbl.boundingRect()
             bounds_view = self.viewBox.mapSceneToView(bounds)
             if bounds_view.boundingRect().width() < x2 - x1:
-                lbl.setText(str(hex(self.y_data[i])))
+                lbl.setText(self._format_string.format(self.y_data[i]))
             else:
-                lbl.setText("\n\n+")
+                lbl.setText("")
 
     def on_load_data(self):
         try:
@@ -305,7 +308,7 @@ class BitVectorWaveform(Waveform):
                 else:
                     display_x.append(x)
                     display_y.append(y)
-                lbl = pg.TextItem(str(hex(y)), anchor=(0, 0.5))
+                lbl = pg.TextItem(self._format_string.format(y), anchor=(0, 0.5))
                 self.addItem(lbl)
                 lbl.setPos(x, 0.5)
                 lbl.setTextWidth(100)
@@ -324,7 +327,7 @@ class BitVectorWaveform(Waveform):
         if self.cursorY is None:
             lbl = "X"
         else:
-            lbl = str(hex(self.cursorY))
+            lbl = self._format_string.format(self.cursorY)
         self.cursor_label.setText(lbl)
 
 
