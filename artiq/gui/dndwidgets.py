@@ -61,6 +61,7 @@ class DragDropSplitter(QtWidgets.QSplitter):
 class VDragScrollArea(QtWidgets.QScrollArea):
     def __init__(self, parent):
         QtWidgets.QScrollArea.__init__(self, parent)
+        self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         self.installEventFilter(self)
         self._margin = 40
         self._timer = QtCore.QTimer(self)
