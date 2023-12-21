@@ -12,6 +12,8 @@ from artiq.coredevice import comm_analyzer
 import os
 import numpy as np
 from operator import setitem
+import itertools
+import bisect
 from enum import Enum
 import pyqtgraph as pg
 import asyncio
@@ -278,21 +280,25 @@ class BitVectorWaveform(Waveform):
         Waveform.__init__(self, channel, state, parent)
         self._labels = []
         self.viewBox.sigTransformChanged.connect(self._update_labels)
-        #self.plotDataItem.opts.update({"downsample": 1, "autoDownsample": False})
+        self.plotDataItem.opts.update({"downsample": 1, "autoDownsample": False})
+        #self.plotDataItem.opts.update({"clipToView": False})
         self._secondaryDataItem = self.plotItem.plot(x=[], y=[], pen='r')
         hx = math.ceil(self.width / 4)
         self._format_string = "{:0=" + str(hx) + "X}"
 
     def _update_labels(self):
-        for i in range(len(self.x_data) - 1): 
-            x1, x2 = self.x_data[i], self.x_data[i+1]
+        for label in self._labels:
+            self.removeItem(label)
+        xmin, xmax = self.viewBox.viewRange()[0]
+        leftmost_label_i = bisect.bisect_left(self.x_data, xmin)
+        rightmost_label_i = bisect.bisect_right(self.x_data, xmax) + 1
+        for i, j in itertools.pairwise(range(leftmost_label_i, rightmost_label_i)): 
+            x1, x2 = self.x_data[i], self.x_data[j] if j < len(self.x_data) else self.state["stopped_x"]
             lbl = self._labels[i]
             bounds = lbl.boundingRect()
             bounds_view = self.viewBox.mapSceneToView(bounds)
             if bounds_view.boundingRect().width() < x2 - x1:
-                lbl.setText(self._format_string.format(self.y_data[i]))
-            else:
-                lbl.setText("")
+                self.plotItem.addItem(lbl)
 
     def on_load_data(self):
         try:
