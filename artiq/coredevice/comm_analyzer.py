@@ -422,7 +422,7 @@ class ChannelsOnlyManager:
 class TTLHandler:
     def __init__(self, manager, name):
         self.name = name
-        self.channel_value = manager.get_channel("ttl/" + name, 1, ty="ttl")
+        self.channel_value = manager.get_channel("ttl/" + name, 1, ty="bit")
         self.last_value = "X"
         self.oe = True
 
@@ -529,7 +529,7 @@ class WishboneHandler:
     def __init__(self, manager, name, read_bit):
         self._reads = []
         self._read_bit = read_bit
-        self.stb = manager.get_channel(name + "/stb", 1, channel_type="ttl")
+        self.stb = manager.get_channel(name + "/stb", 1, ty="bit")
 
     def process_message(self, message):
         self.stb.set_value("1")
@@ -569,7 +569,7 @@ class SPIMasterHandler(WishboneHandler):
                     ("write_length", 8), ("read_length", 8),
                     ("write", 32), ("read", 32)]:
                 self.channels[reg_name] = manager.get_channel(
-                    "{}/{}".format(name, reg_name), reg_width, channel_type="digital")
+                    "{}/{}".format(name, reg_name), reg_width, ty="vector")
 
     def process_write(self, address, data):
         if address == 0:
@@ -608,7 +608,7 @@ class SPIMaster2Handler(WishboneHandler):
                     ("write", 32),
                     ("read", 32)]:
                 self.channels[reg_name] = manager.get_channel(
-                    "{}/{}".format(name, reg_name), reg_width, ty="digital")
+                    "{}/{}".format(name, reg_name), reg_width, ty="vector")
 
     def process_message(self, message):
         self.stb.set_value("1")
@@ -780,7 +780,7 @@ async def async_decoded_dump_to_waveform(devices, dump, uniform_interval=False,
 def get_channel_list(devices):
     manager = ChannelsOnlyManager()
     create_channel_handlers(manager, devices, 1e-9, 3e9, False)
-    manager.get_channel("timestamp", 64, ty="digital")
+    manager.get_channel("timestamp", 64, ty="vector")
     manager.get_channel("interval", 64, ty="analog")
     manager.get_channel("rtio_slack", 64, ty="analog")
     return manager.channels
