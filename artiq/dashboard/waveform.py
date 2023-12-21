@@ -229,7 +229,7 @@ class LogWaveform(Waveform):
         self.cursor_label.setText("")
 
 
-class TTLWaveform(Waveform):
+class BitWaveform(Waveform):
     def __init__(self, channel, state, parent=None):
         Waveform.__init__(self, channel, state, parent)
 
@@ -261,7 +261,7 @@ class TTLWaveform(Waveform):
         self.cursor_label.setText(lbl)
 
 
-class DigitalWaveform(Waveform):
+class BitVectorWaveform(Waveform):
     def __init__(self, channel, state, parent=None):
         Waveform.__init__(self, channel, state, parent)
         self._labels = []
@@ -430,8 +430,8 @@ class WaveformArea(QtWidgets.QWidget):
             for channel in channels:
                 ty = channel[1][1]
                 waveform_type = {
-                    "ttl": TTLWaveform,
-                    "digital": DigitalWaveform,
+                    "bit": BitWaveform,
+                    "vector": BitVectorWaveform,
                     "analog": AnalogWaveform
                 }[ty]
                 self._add_plot(channel, waveform_type)
