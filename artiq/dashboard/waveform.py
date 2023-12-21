@@ -237,17 +237,22 @@ class BitWaveform(Waveform):
         try:
             self.x_data, self.y_data = zip(*self.state['data'][self.name])
             stopped_x = self.state["stopped_x"]
-            previous_y = 0
+            display_y = [0.5]
+            display_x = [0]
+            previous_y = None
             for x, y in zip(self.x_data, self.y_data):
                 state_unchanged = previous_y == y
-                if state_unchanged:
+                if y is None:
+                    y = 0.5
+                elif state_unchanged:
                     arw = pg.ArrowItem(pxMode=True, angle=90)
                     self.addItem(arw)
                     arw.setPos(x, 1)
+                display_y.append(y)
+                display_x.append(x)
                 previous_y = y
-            logger.info(self.y_data)
-            display_y = [0.5] + list(self.y_data) + [self.y_data[-1]]
-            display_x = [0] + list(self.x_data) + [stopped_x]
+            display_y.append(self.y_data[-1])
+            display_x.append(stopped_x)
             self.plotDataItem.setData(x=display_x, y=display_y)
         except:
             logger.info('unable to load data', exc_info=True)
@@ -287,8 +292,8 @@ class BitVectorWaveform(Waveform):
             stopped_x = self.state["stopped_x"]
             for x, y in zip(self.x_data, self.y_data):
                 if y is not None and y != 0:
-                        display_x += [x, x]
-                        display_y += [0, 1]
+                        display_x.append(x)
+                        display_y.append(0)
                         display_x.append(x)
                         display_y.append(1)
                 else:
