@@ -79,7 +79,7 @@ class _AddChannelDialog(QtWidgets.QDialog):
 class Waveform(pg.PlotWidget):
     MIN_HEIGHT = 50
     MAX_HEIGHT = 200
-    PREF_HEIGHT = 100
+    PREF_HEIGHT = 75
 
     cursorMoved = QtCore.pyqtSignal(float)
 
