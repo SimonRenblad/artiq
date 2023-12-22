@@ -160,7 +160,7 @@ class Waveform(pg.PlotWidget):
         self.cursor.setValue(x)
         if len(self.x_data) < 1:
             return
-        ind = np.searchsorted(self.x_data, x, side="left") - 1
+        ind = bisect.bisect_left(self.x_data, x) - 1
         dr = self.plotDataItem.dataRect()
         if dr is None:
             self.cursorY = None
@@ -282,7 +282,7 @@ class BitVectorWaveform(Waveform):
         self.viewBox.sigTransformChanged.connect(self._update_labels)
         self.plotDataItem.opts.update({"downsample": 1, "autoDownsample": False})
         #self.plotDataItem.opts.update({"clipToView": False})
-        self._secondaryDataItem = self.plotItem.plot(x=[], y=[], pen='r')
+        self._secondaryDataItem = self.plotItem.plot(x=[], y=[], pen='r', clipToView=False)
         hx = math.ceil(self.width / 4)
         self._format_string = "{:0=" + str(hx) + "X}"
 
@@ -315,14 +315,13 @@ class BitVectorWaveform(Waveform):
                     display_x.append(x)
                     display_y.append(y)
                 lbl = pg.TextItem(self._format_string.format(y), anchor=(0, 0.5))
-                self.addItem(lbl)
                 lbl.setPos(x, 0.5)
                 lbl.setTextWidth(100)
                 self._labels.append(lbl)
             display_y.append(y)
             display_x.append(stopped_x)
             self.plotDataItem.setData(x=display_x, y=display_y)
-            self._secondaryDataItem.setData(x=[self.x_data[0], stopped_x], y=[0, 0])
+            self._secondaryDataItem.setData(x=display_x, y=np.zeros(len(display_x)))
         except:
             logger.debug('unable to load data', exc_info=True)
             for lbl in self._labels:
