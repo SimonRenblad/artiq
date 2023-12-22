@@ -14,12 +14,11 @@ import numpy as np
 from operator import setitem
 import itertools
 import bisect
-from enum import Enum
 import pyqtgraph as pg
 import asyncio
 import logging
-import time
 import math
+import struct
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +40,10 @@ class _AddChannelDialog(QtWidgets.QDialog):
         self.setLayout(grid)
         self._channels_widget = QtWidgets.QTreeView()
         self._channels_widget.setHeaderHidden(True)
-        self._channels_widget.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectItems)
-        self._channels_widget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self._channels_widget.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectItems)
+        self._channels_widget.setSelectionMode(
+            QtWidgets.QAbstractItemView.ExtendedSelection)
         self._model = Model(dict())
         channels_mgr.add_setmodel_callback(self.set_model)
         grid.addWidget(self._channels_widget, 0, 0, 1, 2)
@@ -108,14 +109,11 @@ class Waveform(pg.PlotWidget):
             "pen": "r",
             "stepMode": "right",
             "connect": "finite",
-            "clipToView": True,
-            "downsample": 10,
-            "autoDownsample": True,
-            "downsampleMethod": "peak",
             "symbolPen": "r",
-            "symbolBrush": "r"
         }
         self.plotDataItem.opts.update(pdi_opts)
+        self.plotDataItem.setDownsampling(ds=10, method="peak", auto=True)
+        self.plotDataItem.setClipToView(True)
 
         self.viewBox = self.plotItem.getViewBox()
         self.viewBox.setMouseEnabled(x=True, y=False)
@@ -141,7 +139,8 @@ class Waveform(pg.PlotWidget):
 
     def on_frame_moved(self):
         value_pos = self.viewBox.mapSceneToView(QtCore.QPoint(0, 0))
-        title_pos = self.viewBox.mapSceneToView(QtCore.QPoint(0, self.height() // 2))
+        title_pos = self.viewBox.mapSceneToView(
+            QtCore.QPoint(0, self.height() // 2))
         self.cursor_label.setPos(value_pos)
         self.title_label.setPos(title_pos)
 
@@ -186,7 +185,8 @@ class Waveform(pg.PlotWidget):
             drag = QtGui.QDrag(self)
             mime = QtCore.QMimeData()
             drag.setMimeData(mime)
-            pixmapi = QtWidgets.QApplication.style().standardIcon(QtWidgets.QStyle.SP_FileIcon)
+            pixmapi = QtWidgets.QApplication.style().standardIcon(
+                QtWidgets.QStyle.SP_FileIcon)
             drag.setPixmap(pixmapi.pixmap(32))
             drag.exec_(QtCore.Qt.MoveAction)
         else:
@@ -210,12 +210,14 @@ class LogWaveform(Waveform):
     def on_load_data(self):
         try:
             self.x_data, self.y_data = zip(*self.state['logs'][self.name])
-            self.plotDataItem.setData(x=self.x_data, y=np.ones(len(self.x_data)))
-            self.plotDataItem.opts.update({"connect": np.zeros(2), "symbol": "x"})
+            self.plotDataItem.setData(
+                x=self.x_data, y=np.ones(len(self.x_data)))
+            self.plotDataItem.opts.update(
+                {"connect": np.zeros(2), "symbol": "x"})
             old_msg = ""
             old_x = 0
             for x, msg in zip(self.x_data, self.y_data):
-                if x == old_x: 
+                if x == old_x:
                     old_msg += "\n" + msg
                 else:
                     lbl = pg.TextItem(old_msg)
@@ -264,7 +266,7 @@ class BitWaveform(Waveform):
         except:
             logger.info('unable to load data', exc_info=True)
             for arw in self._arrows:
-                self.plotItem.removeItem(arw)
+                self.removeItem(arw)
             self.plotDataItem.setData(x=[], y=[])
 
     def refresh_cursor_label(self):
@@ -280,9 +282,9 @@ class BitVectorWaveform(Waveform):
         Waveform.__init__(self, channel, state, parent)
         self._labels = []
         self.viewBox.sigTransformChanged.connect(self._update_labels)
-        self.plotDataItem.opts.update({"downsample": 1, "autoDownsample": False})
-        #self.plotDataItem.opts.update({"clipToView": False})
-        self._secondaryDataItem = self.plotItem.plot(x=[], y=[], pen='r', clipToView=False)
+        #self.plotDataItem.setDownsampling(ds=1)
+        #self.plotDataItem.setClipToView(False)
+        #self.plotDataItem.setDynamicRangeLimit(limit=None)
         hx = math.ceil(self.width / 4)
         self._format_string = "{:0=" + str(hx) + "X}"
 
@@ -292,13 +294,14 @@ class BitVectorWaveform(Waveform):
         xmin, xmax = self.viewBox.viewRange()[0]
         leftmost_label_i = bisect.bisect_left(self.x_data, xmin)
         rightmost_label_i = bisect.bisect_right(self.x_data, xmax) + 1
-        for i, j in itertools.pairwise(range(leftmost_label_i, rightmost_label_i)): 
-            x1, x2 = self.x_data[i], self.x_data[j] if j < len(self.x_data) else self.state["stopped_x"]
+        for i, j in itertools.pairwise(range(leftmost_label_i, rightmost_label_i)):
+            x1 = self.x_data[i] 
+            x2 = self.x_data[j] if j < len(self.x_data) else self.state["stopped_x"]
             lbl = self._labels[i]
             bounds = lbl.boundingRect()
             bounds_view = self.viewBox.mapSceneToView(bounds)
             if bounds_view.boundingRect().width() < x2 - x1:
-                self.plotItem.addItem(lbl)
+                self.addItem(lbl)
 
     def on_load_data(self):
         try:
@@ -314,14 +317,15 @@ class BitVectorWaveform(Waveform):
                 else:
                     display_x.append(x)
                     display_y.append(y)
-                lbl = pg.TextItem(self._format_string.format(y), anchor=(0, 0.5))
+                lbl = pg.TextItem(
+                    self._format_string.format(y), anchor=(0, 0.5))
                 lbl.setPos(x, 0.5)
                 lbl.setTextWidth(100)
+                lbl.setZValue(-100)
                 self._labels.append(lbl)
             display_y.append(y)
             display_x.append(stopped_x)
             self.plotDataItem.setData(x=display_x, y=display_y)
-            self._secondaryDataItem.setData(x=display_x, y=np.zeros(len(display_x)))
         except:
             logger.debug('unable to load data', exc_info=True)
             for lbl in self._labels:
@@ -423,7 +427,8 @@ class WaveformArea(QtWidgets.QWidget):
 
     def _add_plot(self, channel, waveform_type):
         num_channels = self._waveform_area.count()
-        self._waveform_area.setFixedHeight((num_channels + 1) * Waveform.PREF_HEIGHT)
+        self._waveform_area.setFixedHeight(
+            (num_channels + 1) * Waveform.PREF_HEIGHT)
         cw = waveform_type(channel, self._state, parent=self._waveform_area)
         cw.cursorMoved.connect(lambda x: self.on_cursor_moved(x))
         cw.cursorMoved.connect(self.cursorMoved.emit)
@@ -561,7 +566,8 @@ class WaveformProxyClient:
                     await asyncio.sleep(5)
                     self._on_rpc_reconnect.set()
                 else:
-                    logger.info("RPC connected to analyzer proxy on %s/%s", self._proxy_addr, self._proxy_port_ctl)
+                    logger.info("RPC connected to analyzer proxy on %s/%s",
+                                self._proxy_addr, self._proxy_port_ctl)
         except asyncio.CancelledError:
             pass
 
@@ -572,13 +578,15 @@ class WaveformProxyClient:
                 self._on_sub_reconnect.clear()
                 logger.info("Setting up analyzer proxy receiver...")
                 try:
-                    await self.proxy_receiver.connect(self._proxy_addr, self._proxy_port)
+                    await self.proxy_receiver.connect(
+                        self._proxy_addr, self._proxy_port)
                 except Exception:
                     logger.info("Failed to set up analyzer proxy receiver, reconnecting...")
                     await asyncio.sleep(5)
                     self._on_sub_reconnect.set()
                 else:
-                    logger.info("Receiving from analyzer proxy on %s:%s", self._proxy_addr, self._proxy_port)
+                    logger.info("Receiving from analyzer proxy on %s:%s",
+                                self._proxy_addr, self._proxy_port)
         except asyncio.CancelledError:
             pass
 
@@ -592,7 +600,8 @@ class WaveformProxyClient:
             self.rpc_client.close_rpc()
             await self.proxy_receiver.close()
         except Exception as e:
-            logger.error("Error occurred while closing proxy connections: %s", e, exc_info=True)
+            logger.error("Error occurred while closing proxy connections: %s",
+                         e, exc_info=True)
 
 
 class _CursorTimeControl(QtWidgets.QLineEdit):
@@ -613,9 +622,12 @@ class _CursorTimeControl(QtWidgets.QLineEdit):
             pass
 
     def _val_to_text(self, val):
-        self.setText(pg.siFormat(val, suffix="s", allowUnicode=False, precision=self.PRECISION))
+        t = pg.siFormat(val, suffix="s",
+                        allowUnicode=False,
+                        precision=self.PRECISION)
+        self.setText(t)
 
-    def _on_submit(self):
+    def _on_submit(self):  # 
         self.submit.emit(self._value)
         self._val_to_text(self._value)
         self.clearFocus()
@@ -637,7 +649,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._channels_mgr.init({})
 
         self._log_channels_mgr = LocalModelManager(Model)
-        self._log_channels_mgr.init({})
+        self._log_channels_mgr.init({})  # TODO optional: can be one manager?
 
         self._state = {
             "timescale": None,
@@ -653,8 +665,8 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.proxy_client = WaveformProxyClient(self._state, loop)
         devices_sub = Subscriber("devices", self.init_ddb, self.update_ddb)
 
-        self.queue = asyncio.Queue(maxsize=5)
-        proxy_receiver = comm_analyzer.AnalyzerProxyReceiver(self.on_dump_receive)
+        proxy_receiver = comm_analyzer.AnalyzerProxyReceiver(
+            self.on_dump_receive)
         self.proxy_client.devices_sub = devices_sub
         self.proxy_client.proxy_receiver = proxy_receiver
 
@@ -668,7 +680,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         grid.addWidget(self._menu_btn, 0, 0)
 
         self._request_dump_btn = QtWidgets.QToolButton()
-        self._request_dump_btn.setToolTip("Request dump")
+        self._request_dump_btn.setToolTip("Request dump")  # TODO change to better tooltip
         self._request_dump_btn.setIcon(
             QtWidgets.QApplication.style().standardIcon(
                 QtWidgets.QStyle.SP_BrowserReload))
@@ -683,7 +695,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self.traceDataChanged.connect(self._update_log_channels)
         grid.addWidget(self._waveform_area, 2, 0, colspan=12)
 
-        self._add_btn = QtWidgets.QToolButton()
+        self._add_btn = QtWidgets.QToolButton()  # TODO: need better name
         self._add_btn.setToolTip("Add channels...")
         self._add_btn.setIcon(
             QtWidgets.QApplication.style().standardIcon(
@@ -697,11 +709,12 @@ class WaveformDock(QtWidgets.QDockWidget):
             QtWidgets.QApplication.style().standardIcon(
                 QtWidgets.QStyle.SP_FileDialogListView))
         grid.addWidget(self._add_logs_btn, 0, 3)
-        self._add_logs_btn.clicked.connect(self._waveform_area.add_log_plots_dialog)
+        self._add_logs_btn.clicked.connect(
+            self._waveform_area.add_log_plots_dialog)
 
         self._cursor_control = _CursorTimeControl(self)
         grid.addWidget(self._cursor_control, 0, 4, colspan=3)
-        self._cursor_control.submit.connect(self._waveform_area.on_cursor_moved)
+        self._cursor_control.submit.connect(self._waveform_area.on_cursor_moved)  # TODO rename to on_cursor_move
         self._waveform_area.cursorMoved.connect(self._cursor_control.set_time)
 
         self._file_menu = QtWidgets.QMenu()
@@ -724,15 +737,15 @@ class WaveformDock(QtWidgets.QDockWidget):
         ddb = self._state['ddb']
         trace = comm_analyzer.decoded_dump_to_waveform(ddb, decoded_dump)
         self._state.update(trace)
-        self._state['dump'] = args # tuple
+        self._state['dump'] = args  # tuple
         self.traceDataChanged.emit()
 
-    def on_dump_read(self, dump):
+    def on_dump_read(self, dump):  # TODO convert to using tuple representation -> uniformity
         decoded_dump = comm_analyzer.decode_dump(dump)
         ddb = self._state['ddb']
         trace = comm_analyzer.decoded_dump_to_waveform(ddb, decoded_dump)
         self._state.update(trace)
-        self._state['dump'] = dump # bytes
+        self._state['dump'] = dump  # bytes
         self.traceDataChanged.emit()
 
     def _decode_dump(self):
@@ -764,7 +777,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         try:
             with open(filename, 'rb') as f:
                 dump = f.read()
-            self.on_dump_read(dump) 
+            self.on_dump_read(dump)
         except Exception as e:
             logger.error("Failed to open analyzer trace: %s", e)
 
@@ -790,7 +803,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         except Exception as e:
             logger.error("Failed to save analyzer trace: %s", e)
 
-    async def save_vcd(self):
+    async def save_vcd(self):  # TODO fix save to VCD
         ddb = self._state["ddb"]
         dump = self._state["dump"]
         try:
@@ -804,7 +817,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._current_dir = os.path.dirname(filename)
         try:
             with open(filename, 'w') as f:
-                decoded_dump = comm_analyzer.decode_dump(data)
+                decoded_dump = comm_analyzer.decode_dump(dump)
                 comm_analyzer.decoded_dump_to_vcd(f, ddb, decoded_dump)
         except Exception as e:
             logger.error("Faile to save as VCD: %s", e)
