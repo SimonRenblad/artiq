@@ -127,10 +127,11 @@ class Waveform(pg.PlotWidget):
         self.cursorY = 0
         self.addItem(self.cursor)
 
-        self.cursor_label = pg.TextItem()
+        label_brush = QtGui.QBrush(QtGui.QColor(30, 30, 30, 180))
+        self.cursor_label = pg.TextItem(fill=label_brush)
         self.addItem(self.cursor_label)
-
-        self.title_label = pg.TextItem(self.name)
+        
+        self.title_label = pg.TextItem(self.name, fill=label_brush)
         self.addItem(self.title_label)
         self.viewBox.sigRangeChanged.connect(self.on_frame_moved)
         self.viewBox.sigTransformChanged.connect(self.on_frame_moved)
