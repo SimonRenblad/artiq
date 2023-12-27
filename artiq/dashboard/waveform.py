@@ -23,6 +23,10 @@ import struct
 
 logger = logging.getLogger(__name__)
 
+DISPLAY_LOW = 0
+DISPLAY_HIGH = 1 
+DISPLAY_MID = 0.5
+
 
 class Model(DictSyncTreeSepModel):
     def __init__(self, init):
@@ -101,10 +105,11 @@ class Waveform(pg.PlotWidget):
         self._is_show_cursor = True
 
         self.plotItem = self.getPlotItem()
-        self.plotItem.setRange(yRange=(0, 1), padding=0.1)
         self.plotItem.hideButtons()
         self.plotItem.getAxis("bottom").setStyle(showValues=False, tickLength=0)
         self.plotItem.hideAxis("top")
+        self.plotItem.getAxis("left").setStyle(showValues=False, tickLength=0)
+        self.plotItem.setRange(yRange=(DISPLAY_LOW, DISPLAY_HIGH), padding=0.1)
 
         self.plotDataItem = self.plotItem.listDataItems()[0]
         pdi_opts = {
@@ -120,10 +125,7 @@ class Waveform(pg.PlotWidget):
         self.viewBox = self.plotItem.getViewBox()
         self.viewBox.setMouseEnabled(x=True, y=False)
         self.viewBox.disableAutoRange(axis=pg.ViewBox.YAxis)
-        self.viewBox.setLimits(xMin=0)
-
-        self.plotItem.getAxis("left").setStyle(showValues=False, tickLength=0)
-        self.plotItem.setRange(yRange=(0, 1), padding=0.1)
+        self.viewBox.setLimits(xMin=0, minXRange=1e-7)  # Limit zoom due to visual bugs
 
         self.cursor = pg.InfiniteLine()
         self.cursorY = 0
@@ -225,12 +227,12 @@ class LogWaveform(Waveform):
                 else:
                     lbl = pg.TextItem(old_msg)
                     self.addItem(lbl)
-                    lbl.setPos(old_x, 1)
+                    lbl.setPos(old_x, DISPLAY_HIGH)
                     old_msg = msg
                     old_x = x
             lbl = pg.TextItem(old_msg)
             self.addItem(lbl)
-            lbl.setPos(old_x, 1)
+            lbl.setPos(old_x, DISPLAY_HIGH)
         except:
             logger.debug('unable to load data', exc_info=True)
             self.plotDataItem.setData(x=[0], y=[0])
@@ -248,23 +250,25 @@ class BitWaveform(Waveform):
         try:
             self.x_data, self.y_data = zip(*self.state['data'][self.name])
             stopped_x = self.state["stopped_x"]
-            display_y = [0.5]
-            display_x = [0]
+            display_y = []
+            display_x = []
             previous_y = None
             for x, y in zip(self.x_data, self.y_data):
                 state_unchanged = previous_y == y
                 if y is None:
-                    y = 0.5
-                elif state_unchanged:
+                    dis_y = DISPLAY_MID
+                elif y == 1:
+                    dis_y = DISPLAY_HIGH
+                else:
+                    dis_y = DISPLAY_LOW
+                if state_unchanged:
                     arw = pg.ArrowItem(pxMode=True, angle=90)
                     self.addItem(arw)
                     self._arrows.append(arw)
-                    arw.setPos(x, 1)
-                display_y.append(y)
+                    arw.setPos(x, dis_y)
+                display_y.append(dis_y)
                 display_x.append(x)
                 previous_y = y
-            display_y.append(self.y_data[-1])
-            display_x.append(stopped_x)
             self.plotDataItem.setData(x=display_x, y=display_y)
         except:
             logger.info('unable to load data', exc_info=True)
@@ -309,25 +313,26 @@ class BitVectorWaveform(Waveform):
     def on_load_data(self):
         try:
             self.x_data, self.y_data = zip(*self.state['data'][self.name])
-            display_x, display_y = [0], [0.5]
+            display_x, display_y = [], []
             stopped_x = self.state["stopped_x"]
             for x, y in zip(self.x_data, self.y_data):
                 if y is not None and y != 0:
                     display_x.append(x)
-                    display_y.append(0)
+                    display_y.append(DISPLAY_LOW)
                     display_x.append(x)
-                    display_y.append(1)
+                    display_y.append(DISPLAY_HIGH)
+                elif y is not None:
+                    display_x.append(x)
+                    display_y.append(DISPLAY_LOW)
                 else:
                     display_x.append(x)
-                    display_y.append(y)
+                    display_y.append(DISPLAY_MID)
                 lbl = pg.TextItem(
-                    self._format_string.format(y), anchor=(0, 0.5))
-                lbl.setPos(x, 0.5)
+                    self._format_string.format(y), anchor=(0, DISPLAY_MID))
+                lbl.setPos(x, DISPLAY_MID)
                 lbl.setTextWidth(100)
                 lbl.setZValue(-100)
                 self._labels.append(lbl)
-            display_y.append(y)
-            display_x.append(stopped_x)
             self.plotDataItem.setData(x=display_x, y=display_y)
         except:
             logger.debug('unable to load data', exc_info=True)
