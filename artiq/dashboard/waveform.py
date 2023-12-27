@@ -705,7 +705,7 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._add_btn.clicked.connect(self._waveform_area.add_plots_dialog)
 
         self._cursor_control = _CursorTimeControl(self)
-        grid.addWidget(self._cursor_control, 0, 4, colspan=3)
+        grid.addWidget(self._cursor_control, 0, 3, colspan=3)
         self._cursor_control.submit.connect(self._waveform_area.on_cursor_moved)  # TODO rename to on_cursor_move
         self._waveform_area.cursorMoved.connect(self._cursor_control.set_time)
 
