@@ -3,6 +3,7 @@ from PyQt5.QtCore import Qt
 
 from sipyco.sync_struct import Subscriber
 from sipyco.pc_rpc import AsyncioClient
+from sipyco import pyon
 
 from artiq.tools import exc_to_warning
 from artiq.gui.tools import LayoutWidget, get_open_file_name, get_save_file_name
@@ -31,11 +32,11 @@ class Model(DictSyncTreeSepModel):
 class _AddChannelDialog(QtWidgets.QDialog):
     accepted = QtCore.pyqtSignal(list)
 
-    def __init__(self, parent, channels_mgr, title):
+    def __init__(self, parent, channels_mgr):
         QtWidgets.QDialog.__init__(self, parent=parent)
 
         self.setContextMenuPolicy(Qt.ActionsContextMenu)
-        self.setWindowTitle("Add " + title)
+        self.setWindowTitle("Add channels")
         grid = QtWidgets.QGridLayout()
         self.setLayout(grid)
         self._channels_widget = QtWidgets.QTreeView()
@@ -90,6 +91,7 @@ class Waveform(pg.PlotWidget):
         self.setMaximumHeight(Waveform.MAX_HEIGHT)
         self.setMenuEnabled(False)
 
+        self.channel = channel
         self.name = channel[0]
         self.width = channel[1][0]
 
@@ -367,11 +369,10 @@ class AnalogWaveform(Waveform):
 class WaveformArea(QtWidgets.QWidget):
     cursorMoved = QtCore.pyqtSignal(float)
 
-    def __init__(self, parent, state, channels_mgr, log_channels_mgr):
+    def __init__(self, parent, state, channels_mgr):
         QtWidgets.QWidget.__init__(self, parent=parent)
         self._state = state
         self._channels_mgr = channels_mgr
-        self._log_channels_mgr = log_channels_mgr
 
         self._is_show_cursor = True
         self._cursor_x_pos = 0
@@ -419,7 +420,7 @@ class WaveformArea(QtWidgets.QWidget):
         waveform.addAction(action)
 
         action = QtWidgets.QAction("Delete all", waveform)
-        action.triggered.connect(self._clear_plots)
+        action.triggered.connect(self.clear_plots)
         waveform.addAction(action)
 
         action = QtWidgets.QAction("Reset waveform heights", waveform)
@@ -441,39 +442,37 @@ class WaveformArea(QtWidgets.QWidget):
         cw.on_cursor_moved(self._cursor_x_pos)
         cw.update_x_max()
 
-    async def _add_plots_dialog_task(self, manager, title, is_log):
-        dialog = _AddChannelDialog(self, manager, title)
+    async def _add_plots_dialog_task(self):
+        dialog = _AddChannelDialog(self, self._channels_mgr)
         fut = asyncio.Future()
-
         def on_accept(s):
             fut.set_result(s)
         dialog.accepted.connect(on_accept)
         dialog.open()
         channels = await fut
-        if is_log:
-            for channel in channels:
-                self._add_plot(channel, LogWaveform)
-        else:
-            for channel in channels:
-                ty = channel[1][1]
-                waveform_type = {
-                    "bit": BitWaveform,
-                    "vector": BitVectorWaveform,
-                    "analog": AnalogWaveform
-                }[ty]
-                self._add_plot(channel, waveform_type)
+        self.update_channels(channels)
+
+    def update_channels(self, channel_list):
+        type_map = {
+            "bit": BitWaveform,
+            "vector": BitVectorWaveform,
+            "analog": AnalogWaveform,
+            "log": LogWaveform
+        }
+        for channel in channel_list:
+            ty = channel[1][1]
+            waveform_type = type_map[ty]
+            self._add_plot(channel, waveform_type)
+
+    def get_channel_list(self):
+        channel_list = []
+        for i in range(self._waveform_area.count()):
+            cw = self._waveform_area.widget(i)
+            channel_list.append(cw.channel)
+        return channel_list
 
     def add_plots_dialog(self):
-        args = [self._channels_mgr,
-                "channels",
-                False]
-        asyncio.ensure_future(exc_to_warning(self._add_plots_dialog_task(*args)))
-
-    def add_log_plots_dialog(self):
-        args = [self._log_channels_mgr,
-                "logs",
-                True]
-        asyncio.ensure_future(exc_to_warning(self._add_plots_dialog_task(*args)))
+        asyncio.ensure_future(exc_to_warning(self._add_plots_dialog_task()))
 
     def _remove_plot(self, cw):
         num_channels = self._waveform_area.count() - 1
@@ -481,7 +480,7 @@ class WaveformArea(QtWidgets.QWidget):
         self._waveform_area.setFixedHeight(num_channels * Waveform.PREF_HEIGHT)
         self._waveform_area.refresh()
 
-    def _clear_plots(self):
+    def clear_plots(self):
         for i in reversed(range(self._waveform_area.count())):
             cw = self._waveform_area.widget(i)
             self._remove_plot(cw)
@@ -649,9 +648,6 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._channels_mgr = LocalModelManager(Model)
         self._channels_mgr.init({})
 
-        self._log_channels_mgr = LocalModelManager(Model)
-        self._log_channels_mgr.init({})  # TODO optional: can be one manager?
-
         self._state = {
             "timescale": None,
             "stopped_x": None,
@@ -690,8 +686,7 @@ class WaveformDock(QtWidgets.QDockWidget):
             lambda: asyncio.ensure_future(self.proxy_client.trigger_proxy_task()))
 
         self._waveform_area = WaveformArea(self, self._state,
-                                           self._channels_mgr,
-                                           self._log_channels_mgr)
+                                           self._channels_mgr)
         self.traceDataChanged.connect(self._waveform_area.on_trace_update)
         self.traceDataChanged.connect(self._update_log_channels)
         grid.addWidget(self._waveform_area, 2, 0, colspan=12)
@@ -704,15 +699,6 @@ class WaveformDock(QtWidgets.QDockWidget):
         grid.addWidget(self._add_btn, 0, 2)
         self._add_btn.clicked.connect(self._waveform_area.add_plots_dialog)
 
-        self._add_logs_btn = QtWidgets.QToolButton()
-        self._add_logs_btn.setToolTip("Add logs...")
-        self._add_logs_btn.setIcon(
-            QtWidgets.QApplication.style().standardIcon(
-                QtWidgets.QStyle.SP_FileDialogListView))
-        grid.addWidget(self._add_logs_btn, 0, 3)
-        self._add_logs_btn.clicked.connect(
-            self._waveform_area.add_log_plots_dialog)
-
         self._cursor_control = _CursorTimeControl(self)
         grid.addWidget(self._cursor_control, 0, 4, colspan=3)
         self._cursor_control.submit.connect(self._waveform_area.on_cursor_moved)  # TODO rename to on_cursor_move
@@ -722,6 +708,8 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._add_async_action("Open trace...", self.open_trace)
         self._add_async_action("Save trace...", self.save_trace)
         self._add_async_action("Save VCD...", self.save_vcd)
+        self._add_async_action("Open list of channels...", self.open_list_channels)
+        self._add_async_action("Save list of channels...", self.save_list_channels)
         self._menu_btn.setMenu(self._file_menu)
 
     def _add_async_action(self, label, coro):
@@ -730,7 +718,14 @@ class WaveformDock(QtWidgets.QDockWidget):
         self._file_menu.addAction(action)
 
     def _update_log_channels(self):
-        self._log_channels_mgr.init(self._state['logs'])
+        log_channels = dict()
+        for log in self._state['logs']:
+            self._channels_mgr.update({
+                "action": "setitem",
+                "path": "",
+                "key": log,
+                "value": (0, "log")
+            })
 
     def on_dump_receive(self, *args):
         header = comm_analyzer.decode_header_from_receiver(*args)
@@ -824,6 +819,39 @@ class WaveformDock(QtWidgets.QDockWidget):
             logger.error("Faile to save as VCD: %s", e)
         finally:
             logger.info("Finished writing to VCD.")
+
+    async def open_list_channels(self):
+        try:
+            filename = await get_open_file_name(
+                self,
+                "Open List of Channels",
+                self._current_dir,
+                "All files (*.*)")
+        except asyncio.CancelledError:
+            return
+        self._current_dir = os.path.dirname(filename)
+        try:
+            channel_list = pyon.load_file(filename)
+            self._waveform_area.clear_plots()
+            self._waveform_area.update_channels(channel_list)
+        except Exception as e:
+            logger.error("Failed to open list of channels: %s", e)
+
+    async def save_list_channels(self):
+        try:
+            filename = await get_save_file_name(
+                self,
+                "Load Analyzer Trace",
+                self._current_dir,
+                "All files (*.*)")
+        except asyncio.CancelledError:
+            return
+        self._current_dir = os.path.dirname(filename)
+        try:
+            obj = self._waveform_area.get_channel_list()
+            pyon.store_file(filename, obj)
+        except Exception as e:
+            logger.error("Failed to open analyzer trace: %s", e)
 
     # DeviceDB subscriber callbacks
     def init_ddb(self, ddb):
