@@ -372,7 +372,7 @@ class WaveformManager:
         self.current_time = 0
         self.channels = list()
         self.current_scope = ""
-        self.trace = {"timescale": None, "stopped_x": None, "logs": dict(), "data": dict()}
+        self.trace = {"timescale": 1, "stopped_x": None, "logs": dict(), "data": dict()}
 
     def set_timescale_ps(self, timescale):
         self.trace["timescale"] = timescale
@@ -395,10 +395,10 @@ class WaveformManager:
 
     def set_time(self, time):
         for channel in self.channels:
-            channel.set_time(time * 1e-12 * self.trace["timescale"])
+            channel.set_time(time * self.trace["timescale"])
 
     def set_end_time(self, time):
-        self.trace["stopped_x"] = time * 1e-12 * self.trace["timescale"]
+        self.trace["stopped_x"] = time * self.trace["timescale"]
 
 
 class ChannelsOnlyManager:
