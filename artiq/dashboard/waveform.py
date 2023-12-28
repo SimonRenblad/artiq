@@ -125,7 +125,7 @@ class Waveform(pg.PlotWidget):
         self.viewBox = self.plotItem.getViewBox()
         self.viewBox.setMouseEnabled(x=True, y=False)
         self.viewBox.disableAutoRange(axis=pg.ViewBox.YAxis)
-        self.viewBox.setLimits(xMin=0, minXRange=1e-7)  # Limit zoom due to visual bugs
+        self.viewBox.setLimits(xMin=0, minXRange=20)  # Limit zoom due to visual bugs
 
         self.cursor = pg.InfiniteLine()
         self.cursorY = 0
@@ -391,10 +391,9 @@ class WaveformArea(QtWidgets.QWidget):
         self._ref_axis.hideAxis("bottom")
         self._ref_axis.hideAxis("left")
         self._ref_axis.hideButtons()
-        self._ref_axis.setFixedHeight(45)
+        self._ref_axis.setFixedHeight(25)
         self._ref_axis.setMenuEnabled(False)
         top = pg.AxisItem("top")
-        top.setLabel("", units="s")
         self._ref_axis.setAxisItems({"top": top})
 
         self._ref_vb = self._ref_axis.getPlotItem().getViewBox()
@@ -622,17 +621,17 @@ class _CursorTimeControl(QtWidgets.QLineEdit):
 
     def _text_to_val(self, text):
         try:
-            self._value = pg.siEval(text)
+            self._value = pg.siEval(text) * 1e12
         except Exception:
             pass
 
     def _val_to_text(self, val):
-        t = pg.siFormat(val, suffix="s",
+        t = pg.siFormat(val * 1e-12, suffix="s",
                         allowUnicode=False,
                         precision=self.PRECISION)
         self.setText(t)
 
-    def _on_submit(self):  # 
+    def _on_submit(self):
         self.submit.emit(self._value)
         self._val_to_text(self._value)
         self.clearFocus()
