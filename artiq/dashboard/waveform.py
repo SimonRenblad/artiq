@@ -289,7 +289,7 @@ class BitVectorWaveform(Waveform):
         Waveform.__init__(self, channel, state, parent)
         self._labels = []
         self.viewBox.sigTransformChanged.connect(self._update_labels)
-        #self.plotDataItem.setDownsampling(ds=1)
+        self.plotDataItem.setDownsampling(ds=1, auto=False)
         #self.plotDataItem.setClipToView(False)
         #self.plotDataItem.setDynamicRangeLimit(limit=None)
         hx = math.ceil(self.width / 4)
