@@ -272,8 +272,14 @@ def main():
         server_description = server_name + " ({})".format(args.server)
     else:
         server_description = args.server
-    logging.info("ARTIQ dashboard %s connected to master %s",
-                 artiq_version, server_description)
+    logging.info("ARTIQ dashboard %s connected to master %s\n"
+                 "connected to master notify %s:%d\n"
+                 "connected to master control %s:%d\n"
+                 "connected to master broadcast %s:%d",
+                 artiq_version, server_description,
+                 args.server, args.port_notify, 
+                 args.server, args.port_control, 
+                 args.server, args.port_broadcast)
     # run
     main_window.show()
     loop.run_until_complete(main_window.exit_request.wait())
