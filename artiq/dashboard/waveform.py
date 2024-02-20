@@ -89,7 +89,7 @@ class RPCProxyClient(_BaseProxyClient):
             await self.client.connect_rpc(self.addr,
                                           self.port,
                                           "coreanalyzer_proxy_control")
-            logger.info("connected to analyzer proxy control %s:%d", self.addr, self.port)
+            logger.info("dashboard connected to analyzer proxy control %s:%d", self.addr, self.port)
         except:
             logger.error("error connecting to analyzer proxy control", exc_info=True)
             raise
@@ -109,7 +109,7 @@ class ReceiverProxyClient(_BaseProxyClient):
     async def reconnect_cr(self):
         try:
             await self.receiver.connect(self.addr, self.port)
-            logger.info("listening to analyzer proxy %s:%d", self.addr, self.port)
+            logger.info("dashboard connected to analyzer proxy %s:%d", self.addr, self.port)
         except:
             logger.error("error connecting to analyzer proxy", exc_info=True)
             raise
