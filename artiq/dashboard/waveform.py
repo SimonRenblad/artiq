@@ -72,7 +72,7 @@ class ProxyClient():
                 await self._reconnect_event.wait()
                 self._reconnect_event.clear()
                 if self.receiver is not None:
-                    await self.receiver.close()
+                    self.receiver.close()
                     self.receiver = None
                 self.receiver = comm_analyzer.AnalyzerProxyReceiver(
                     self.receive_cb, self.disconnect_cb)
@@ -94,10 +94,11 @@ class ProxyClient():
         except asyncio.CancelledError:
             pass
 
-    async def close(self):
+    def close(self):
         self._reconnect_task.cancel()
         try:
-            await self.receiver.close()
+            if self.receiver is not None:
+                self.receiver.close()
         except:
             logger.error("error closing connection to analyzer proxy", exc_info=True)
 
