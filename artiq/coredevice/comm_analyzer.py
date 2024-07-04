@@ -467,6 +467,51 @@ class DDSHandler:
             self._decode_ad9914_write(message)
 
 
+class UrukulHandler:
+    def __init__(self, manager, cpld):
+        self.manager = manager
+        self.dds_channels = dict()
+
+    # needs to change depending on the structure of the urukul driver
+    def add_dds_channel(self, name, dds_channel_nr):
+        dds_channel = dict()
+        frequency_precision = max(0, math.ceil(math.log10(2**32 / self.sysclk) + 6)) # fixme
+        phase_precision = max(0, math.ceil(math.log10(2**16)))
+        with self.manager.scope("dds", name):
+            dds_channel["vcd_frequency"] = \
+                self.manager.get_channel(name + "/frequency", 64, 
+                                         ty=WaveformType.ANALOG, 
+                                         precision=frequency_precision,
+                                         unit="MHz")
+            dds_channel["vcd_phase"] = \
+                self.manager.get_channel(name + "/phase", 64, 
+                                         ty=WaveformType.ANALOG,
+                                         precision=phase_precision)
+        dds_channel["ftw"] = [None, None]
+        dds_channel["pow"] = None
+        self.dds_channels[dds_channel_nr] = dds_channel
+        self.selected_channel = None
+
+    def process_message(self, message):
+        if isinstance(message, OutputMessage):
+            logger.debug("Urukul write @%d 0x%04x to 0x%02x",
+                         message.timestamp, message.data, message.address)
+            data = message.data
+            address = message.address
+            if address == 1: # config
+                chip_sel = data >> 24
+                div = data >> 16 & 0xff
+                length = data >> 8 & 0x1f
+                flags = data & 0xff
+            elif address == 0: # write
+                # check the values set for config
+                # ensure that config has SPI_END flag + there is a chip_select
+                # only accept chip_sel with ftw word
+                self.channels["write"].set_value("{:032b}".format(data))
+            else:
+                raise ValueError("bad address", address)
+
+
 class WishboneHandler:
     def __init__(self, manager, name, read_bit):
         self._reads = []
