@@ -396,6 +396,7 @@ class TTLClockGenHandler:
             self.channel_frequency.set_value_double(frequency)
 
 
+# TODO change name to AD9914Handler
 class DDSHandler:
     def __init__(self, manager, onehot_sel, sysclk):
         self.manager = manager
@@ -499,11 +500,15 @@ class AD9910Handler:
             data = message.data
             address = message.address
             if address == 1: # config
-                chip_sel = data >> 24
-                div = data >> 16 & 0xff
-                length = data >> 8 & 0x1f
-                flags = data & 0xff
+                self.chip_sel = data >> 24
+                self.div = data >> 16 & 0xff
+                self.length = data >> 8 & 0x1f
+                self.flags = data & 0xff
             elif address == 0: # write
+                # TODO determine the various conditions for a write
+
+                # TODO determine if it is a config write (ie setting the address)
+
                 # check the values set for config
                 # ensure that config has SPI_END flag + there is a chip_select
                 # only accept chip_sel with ftw word
@@ -544,11 +549,17 @@ class AD9912Handler:
             data = message.data
             address = message.address
             if address == 1: # config
-                chip_sel = data >> 24
-                div = data >> 16 & 0xff
-                length = data >> 8 & 0x1f
-                flags = data & 0xff
+                self.chip_sel = data >> 24
+                self.div = data >> 16 & 0xff
+                self.length = data >> 8 & 0x1f
+                self.flags = data & 0xff
             elif address == 0: # write
+                # TODO determine the various conditions for a write
+
+                # TODO determine if it is a config write (ie setting the address)
+
+                # TODO also need to figure out the double read (48 bit ftw)
+
                 # check the values set for config
                 # ensure that config has SPI_END flag + there is a chip_select
                 # only accept chip_sel with ftw word
