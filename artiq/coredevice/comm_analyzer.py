@@ -10,6 +10,8 @@ import logging
 import socket
 import math
 
+from artiq.coredevice import spi2, urukul
+
 
 logger = logging.getLogger(__name__)
 
@@ -469,6 +471,18 @@ class DDSHandler:
 
 
 class AD9910Handler:
+    _AD9910_REG_FTW = 0x07 
+    # shifted by << 24 so need to shift >> by 24 to confirm
+    # also is a length 8 during the address
+    # and 32 for the actual value
+    # for the data transfer -> spi.SPI_END is ORed in with the flags
+    _AD9910_REG_POW = 0x08
+    # the spi flag is from urukul
+    # SPI_CONFIG = (0 * spi.SPI_OFFLINE | 0 * spi.SPI_END |
+    #               0 * spi.SPI_INPUT | 1 * spi.SPI_CS_POLARITY |
+    #               0 * spi.SPI_CLK_POLARITY | 0 * spi.SPI_CLK_PHASE |
+    #               0 * spi.SPI_LSB_FIRST | 0 * spi.SPI_HALF_DUPLEX)
+
     def __init__(self, manager, cpld):
         self.manager = manager
         self.dds_channels = dict()
@@ -476,8 +490,8 @@ class AD9910Handler:
     # needs to change depending on the structure of the urukul driver
     def add_dds_channel(self, name, dds_channel_nr):
         dds_channel = dict()
-        frequency_precision = max(0, math.ceil(math.log10(2**32 / self.sysclk) + 6)) # fixme
-        phase_precision = max(0, math.ceil(math.log10(2**16)))
+        # frequency_precision = max(0, math.ceil(math.log10(2**32 / self.sysclk) + 6)) # fixme
+        # phase_precision = max(0, math.ceil(math.log10(2**16)))
         with self.manager.scope("dds", name):
             dds_channel["vcd_frequency"] = \
                 self.manager.get_channel(name + "/frequency", 64, 
@@ -492,6 +506,7 @@ class AD9910Handler:
         dds_channel["pow"] = None
         self.dds_channels[dds_channel_nr] = dds_channel
         self.selected_channel = None
+        self.ftw_or_pow = None
 
     def process_message(self, message):
         if isinstance(message, OutputMessage):
@@ -505,14 +520,21 @@ class AD9910Handler:
                 self.length = data >> 8 & 0x1f
                 self.flags = data & 0xff
             elif address == 0: # write
-                # TODO determine the various conditions for a write
-
-                # TODO determine if it is a config write (ie setting the address)
-
-                # check the values set for config
-                # ensure that config has SPI_END flag + there is a chip_select
-                # only accept chip_sel with ftw word
-                self.channels["write"].set_value("{:032b}".format(data))
+                dds_channel = self.dds_channels[self.chip_sel]
+                if self.flags == urukul.SPI_CONFIG:
+                    # setting the address
+                    if data == 0x07:
+                        dds_channel["ftw_or_pow"] = True
+                elif self.flags == urukul.SPI_CONFIG | spi2.SPI_END:
+                    if dds_channel["ftw_or_pow"]:
+                        frequency = data / 2**32 # TODO: add the actual conversion from mu to freq
+                        dds_channel["vcd_frequency"].set_value_double(frequency)
+                    else:
+                        addr = data >> 24
+                        if addr == 0x08: # pow is being set
+                            pow = (data >> 8) & 0xffff
+                            phase_offset = pow / 2**16 # TODO: use the actual conversion
+                            dds_channel["vcd_phase"].set_value_double(phase_offset)
             else:
                 raise ValueError("bad address", address)
 
