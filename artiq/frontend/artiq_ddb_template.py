@@ -288,7 +288,7 @@ class PeripheralManager:
         for i in range(4):
             if dds == "ad9910":
                 self.gen("""
-                    device_db["{name}_ch{uchn}"] = {{
+                    device_db["{name}[{uchn}]"] = {{
                         "type": "local",
                         "module": "artiq.coredevice.ad9910",
                         "class": "AD9910",
@@ -309,7 +309,7 @@ class PeripheralManager:
                     io_update_delay=",\n        \"io_update_delay\": \"eeprom_{}:{}\"".format(urukul_name, 64 + 4*i) if synchronization else "")
             elif dds == "ad9912":
                 self.gen("""
-                    device_db["{name}_ch{uchn}"] = {{
+                    device_db["{name}[{uchn}]"] = {{
                         "type": "local",
                         "module": "artiq.coredevice.ad9912",
                         "class": "AD9912",
@@ -358,7 +358,7 @@ class PeripheralManager:
 
         for i in range(4):
             self.gen("""
-                device_db["{name}_ch{mchn}"] = {{
+                device_db["{name}[{mchn}]"] = {{
                     "type": "local",
                     "module": "artiq.coredevice.adf5356",
                     "class": "ADF5356",
