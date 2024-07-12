@@ -643,56 +643,56 @@ index c52b82a947..8e9d875205 100644
 +        "arguments": {"channel": 17}
 +    },
 +
-     "suservo0_ch0": {
+     "suservo0[0]": {
          "type": "local",
          "module": "artiq.coredevice.suservo",
          "class": "Channel",
 -        "arguments": {"channel": 16, "servo_device": "suservo0"}
 +        "arguments": {"channel": 18, "servo_device": "suservo0"}
      },
-     "suservo0_ch1": {
+     "suservo0[1]": {
          "type": "local",
          "module": "artiq.coredevice.suservo",
          "class": "Channel",
 -        "arguments": {"channel": 17, "servo_device": "suservo0"}
 +        "arguments": {"channel": 19, "servo_device": "suservo0"}
      },
-     "suservo0_ch2": {
+     "suservo0[2]": {
          "type": "local",
          "module": "artiq.coredevice.suservo",
          "class": "Channel",
 -        "arguments": {"channel": 18, "servo_device": "suservo0"}
 +        "arguments": {"channel": 20, "servo_device": "suservo0"}
      },
-     "suservo0_ch3": {
+     "suservo0[3]": {
          "type": "local",
          "module": "artiq.coredevice.suservo",
          "class": "Channel",
 -        "arguments": {"channel": 19, "servo_device": "suservo0"}
 +        "arguments": {"channel": 21, "servo_device": "suservo0"}
      },
-     "suservo0_ch4": {
+     "suservo0[4]": {
          "type": "local",
          "module": "artiq.coredevice.suservo",
          "class": "Channel",
 -        "arguments": {"channel": 20, "servo_device": "suservo0"}
 +        "arguments": {"channel": 22, "servo_device": "suservo0"}
      },
-     "suservo0_ch5": {
+     "suservo0[5]": {
          "type": "local",
          "module": "artiq.coredevice.suservo",
          "class": "Channel",
 -        "arguments": {"channel": 21, "servo_device": "suservo0"}
 +        "arguments": {"channel": 23, "servo_device": "suservo0"}
      },
-     "suservo0_ch6": {
+     "suservo0[6]": {
          "type": "local",
          "module": "artiq.coredevice.suservo",
          "class": "Channel",
 -        "arguments": {"channel": 22, "servo_device": "suservo0"}
 +        "arguments": {"channel": 24, "servo_device": "suservo0"}
      },
-     "suservo0_ch7": {
+     "suservo0[7]": {
          "type": "local",
          "module": "artiq.coredevice.suservo",
          "class": "Channel",
@@ -816,7 +816,7 @@ index b6d9294a37..93a74d46e7 100755
 +                ttl_channel=rtio_offset+next(channel))
          for i in range(8):
              self.gen("""
-                 device_db["{suservo_name}_ch{suservo_chn}"] = {{
+                 device_db["{suservo_name}[{suservo_ch}]"] = {{
 @@ -472,17 +482,19 @@ def process_suservo(self, rtio_offset, peripheral):
                  }}
                  device_db["{urukul_name}_cpld"] = {{
