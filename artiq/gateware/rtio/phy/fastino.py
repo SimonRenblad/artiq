@@ -28,6 +28,10 @@ class Fastino(Module):
         # dac data words
         dacs = [Signal(16) for i in range(32)]
         self.probes = dacs
+        staged_dacs = [Signal(16) for i in range(32)]
+        override_en = [Signal() for i in range(32)]
+        override_o = [Signal(16) for i in range(32)]
+        self.overrides = override_en + override_o
 
         header = Record([
             ("cfg", 4),
@@ -93,13 +97,21 @@ class Fastino(Module):
                 header.typ.eq(1),
             ],
         }
+        overrides = {
+            "default": []
+        }
         for i in range(0, len(dacs), width):
             cases[i] = [
-                Cat(dacs[i:i + width]).eq(self.rtlink.o.data),
+                Cat(staged_dacs[i:i + width]).eq(self.rtlink.o.data),
                 [If(~hold[i + j] & (header.typ == 0),
                     header.enable[i + j].eq(1),
                 ) for j in range(width)]
             ]
+            overrides[i] = If(override_en[i],
+                              Cat(staged_dacs[i:i + width]).eq(Replicate(override_o[i], width))
+                           ).Else(
+                              Cat(staged_dacs[i:i + width]).eq(self.rtlink.o.data)
+                           )
 
         self.comb += [
             If(header.typ == 0,
@@ -119,6 +131,11 @@ class Fastino(Module):
             If(self.rtlink.o.stb,
                 Case(self.rtlink.o.address, cases),
             ),
+            [If(override_en[i],
+                Cat(dacs[i:i + width]).eq(Cat(override_o[i:i + width]))
+             ).Else(
+                Cat(dacs[i:i + width]).eq(Cat(staged_dacs[i: i + width]))
+             ) for i in range(0, len(dacs), width)]
         ]
 
         self.sync += [
