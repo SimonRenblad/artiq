@@ -728,15 +728,9 @@ def decoded_dump_to_target(manager, devices, dump, uniform_interval):
         logger.warning("unable to determine DDS sysclk")
         dds_sysclk = 3e9  # guess
 
-    if isinstance(dump.messages[-1], StoppedMessage):
-        m = dump.messages[-1]
-        end_time = get_message_time(m)
-        manager.set_end_time(end_time)
-        messages = dump.messages[:-1]
-    else:
-        logger.warning("StoppedMessage missing")
-        messages = dump.messages
-    messages = sorted(messages, key=get_message_time)
+    if not isinstance(dump.messages[-1], StoppedMessage):
+        logger.warning("No StoppedMessage at end of dump")
+    messages = sorted(dump.messages, key=get_message_time)
 
     channel_handlers = create_channel_handlers(
         manager, devices, ref_period,
@@ -752,6 +746,7 @@ def decoded_dump_to_target(manager, devices, dump, uniform_interval):
         interval = manager.get_channel("interval", 64, ty=WaveformType.ANALOG)
     slack = manager.get_channel("rtio_slack", 64, ty=WaveformType.ANALOG)
 
+    stops = []
     manager.set_time(0)
     start_time = 0
     for m in messages:
@@ -762,12 +757,15 @@ def decoded_dump_to_target(manager, devices, dump, uniform_interval):
         manager.set_start_time(start_time)
     t0 = start_time
     for i, message in enumerate(messages):
+        if isinstance(message, StoppedMessage):
+            stops.append(message)
+            continue
         if message.channel in channel_handlers:
             t = get_message_time(message)
             if t >= 0:
                 if uniform_interval:
                     interval.set_value_double((t - t0)*ref_period)
-                    manager.set_time(i)
+                    manager.set_time(i - len(stops))
                     timestamp.set_value("{:064b}".format(t))
                     t0 = t
                 else:
@@ -776,3 +774,8 @@ def decoded_dump_to_target(manager, devices, dump, uniform_interval):
             if isinstance(message, OutputMessage):
                 slack.set_value_double(
                     (message.timestamp - message.rtio_counter)*ref_period)
+    for stop in stops:
+        t = get_message_time(stop)
+        logger.debug("StoppedMessage at %d", get_message_time(stop))
+        manager.set_end_time(t)
+
