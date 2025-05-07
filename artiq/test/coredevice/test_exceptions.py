@@ -6,6 +6,7 @@ from artiq.test.hardware_testbench import ExperimentCase
 from artiq.compiler.embedding import EmbeddingMap
 from artiq.coredevice.core import test_exception_id_sync
 import artiq.coredevice.exceptions as exceptions
+from builtins import AssertionError
 
 
 class CustomException(Exception):
@@ -147,3 +148,53 @@ class ExceptionSyncTest(ExperimentCase):
             name = name.split('.')[-1].split(':')[-1]
             with self.assertRaises(getattr(exceptions, name)) as ctx:
                 exp.raise_exception_host(id)
+
+class _TestBuiltinExceptions(EnvExperiment):
+    def build(self):
+        self.setattr_device("core")
+
+    @rpc
+    def _raise_assertion(self):
+        assert False
+
+    @kernel
+    def catch_assertion_kernel(self):
+        caught = False
+        try:
+            self._raise_assertion()
+        except AssertionError:
+            caught = True
+        return caught
+
+    @rpc
+    def _raise_index(self):
+        [0][1]
+
+    @kernel
+    def catch_index_kernel(self):
+        caught = False
+        try:
+            self._raise_index()
+        except IndexError:
+            caught = True
+        return caught
+
+    @kernel
+    def raise_index_kernel(self):
+        [0][1]
+
+
+class BuiltinExceptionsTest(ExperimentCase):
+    # cannot be raised from kernel
+    def test_assertion_error_rpc(self):
+        exp = self.create(_TestBuiltinExceptions)
+        self.assertTrue(exp.catch_assertion_kernel())
+
+    # can be raised from kernel
+    def test_index_kernel_rpc(self):
+        exp = self.create(_TestBuiltinExceptions)
+        self.assertTrue(exp.catch_index_kernel())
+
+    def test_index_kernel_raised(self):
+        exp = self.create(_TestBuiltinExceptions)
+        self.assertRaises(IndexError, exp.raise_index_kernel)
