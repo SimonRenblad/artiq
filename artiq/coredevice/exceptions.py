@@ -7,13 +7,6 @@ from numpy.linalg import LinAlgError
 from artiq import __artiq_dir__ as artiq_dir
 from artiq.coredevice.runtime import source_loader
 
-"""
-This file provides class definition for all the exceptions declared in `EmbeddingMap` in `artiq.compiler.embedding`
-
-For Python builtin exceptions, use the `builtins` module
-For ARTIQ specific exceptions, inherit from `Exception` class
-"""
-
 AssertionError = builtins.AssertionError
 AttributeError = builtins.AttributeError
 IndexError = builtins.IndexError
