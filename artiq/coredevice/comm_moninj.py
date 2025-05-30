@@ -42,6 +42,7 @@ class CommMonInj:
             self._receive_task = asyncio.ensure_future(self._receive_cr())
         except:
             self._writer.close()
+            await self._writer.wait_closed()
             del self._reader
             del self._writer
             raise
@@ -59,6 +60,7 @@ class CommMonInj:
                 pass
         finally:
             self._writer.close()
+            await self._writer.wait_closed()
             del self._reader
             del self._writer
 
