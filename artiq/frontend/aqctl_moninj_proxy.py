@@ -5,6 +5,7 @@ import logging
 import asyncio
 import struct
 from enum import Enum
+import atexit
 
 from sipyco.tools import AsyncioServer, SignalHandler
 from sipyco.pc_rpc import Server
@@ -193,49 +194,82 @@ class PingTarget:
         return True
 
 
-def main():
+async def run_task_list(task_list):
+    done, pending = await asyncio.wait(task_list, return_when=asyncio.FIRST_COMPLETED)
+    for task in done:
+        task.result()
+    return { x.get_name() for x in done }
+
+
+finalizers = []
+
+
+async def run_finalizers(task):
+    try:
+        await task
+    finally:
+        for finalizer in finalizers:
+            await finalizer()
+
+
+def add_finalizer(finalizer):
+    finalizers.append(finalizer)
+
+
+async def main():
     args = get_argparser().parse_args()
     common_args.init_logger_from_args(args)
 
     bind_address = common_args.bind_address_from_args(args)
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        signal_handler = SignalHandler()
-        signal_handler.setup()
-        try:
-            monitor_mux = MonitorMux()
-            comm_moninj = CommMonInj(monitor_mux.monitor_cb,
-                                     monitor_mux.injection_status_cb,
-                                     monitor_mux.disconnect_cb)
-            monitor_mux.comm_moninj = comm_moninj
-            loop.run_until_complete(comm_moninj.connect(args.core_addr))
-            try:
-                proxy_server = ProxyServer(monitor_mux)
-                loop.run_until_complete(proxy_server.start(bind_address, args.port_proxy))
-                try:
-                    server = Server({"moninj_proxy": PingTarget()}, None, True)
-                    loop.run_until_complete(server.start(bind_address, args.port_control))
-                    try:
-                        _, pending = loop.run_until_complete(asyncio.wait(
-                            [loop.create_task(signal_handler.wait_terminate()),
-                             loop.create_task(server.wait_terminate()),
-                             comm_moninj.wait_terminate()],
-                            return_when=asyncio.FIRST_COMPLETED))
-                        for task in pending:
-                            task.cancel()
-                    finally:
-                        loop.run_until_complete(server.stop())
-                finally:
-                    loop.run_until_complete(proxy_server.stop())
-            finally:
-                loop.run_until_complete(comm_moninj.close())
-        finally:
-            signal_handler.teardown()
-    finally:
-        loop.close()
+    signal_handler = SignalHandler()
+    signal_handler.setup()
+    signal_task = asyncio.create_task(signal_handler.wait_terminate(), name="signal_handler")
+    atexit.register(signal_handler.teardown)
+
+    server = Server({"moninj_proxy": PingTarget()}, None, True)
+    server_task = asyncio.create_task(server.wait_terminate(), name="control")
+
+    task_list = [signal_task]
+    task_list.append(asyncio.create_task(server.start(bind_address, args.port_control)))
+
+    done = await run_task_list(task_list)
+    if 'signal_handler' in done:
+        return
+
+    add_finalizer(server.stop)
+
+    monitor_mux = MonitorMux()
+    comm_moninj = CommMonInj(monitor_mux.monitor_cb,
+                             monitor_mux.injection_status_cb,
+                             monitor_mux.disconnect_cb)
+    monitor_mux.comm_moninj = comm_moninj
+
+    proxy_server = ProxyServer(monitor_mux)
+
+    task_list = [signal_task, server_task]
+    task_list.append(asyncio.create_task(comm_moninj.connect(args.core_addr)))
+
+    done = await run_task_list(task_list)
+    if 'control' in done or 'signal_handler' in done:
+        return
+
+    add_finalizer(comm_moninj.close)
+
+    task_list = [signal_task, server_task]
+    task_list.append(asyncio.create_task(proxy_server.start(bind_address, args.port_proxy)))
+
+    done = await run_task_list(task_list)
+    if 'control' in done or 'signal_handler' in done:
+        return
+
+    add_finalizer(proxy_server.stop)
+
+    task_list = [signal_task, server_task]
+    task_list.append(comm_moninj.wait_terminate())
+
+    await run_task_list(task_list)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(run_finalizers(main()))
