@@ -27,7 +27,7 @@ time_end = 0
 class _Transfer(EnvExperiment):
     def build(self):
         self.setattr_device("core")
-        self.count = 10
+        self.count = 20
         self.h2d = [0.0] * self.count
         self.d2h = [0.0] * self.count
 
@@ -167,6 +167,40 @@ class TransferTest(ExperimentCase):
         for v in self.results:
             print("| {} | {:>12.2f} | {:>12.2f} |".format(
                 pad(v[0]), v[1], v[2]))
+
+    def test_performance_pooled(self):
+        def _test(name, big, n=50):
+            exp = self.create(_Transfer)
+            d2h = []
+            h2d = []
+            scaler = (1 << 20) if big else (1 << 10)
+            for _ in range(n):
+                results = getattr(exp, name)(big)
+                h2d.append(results[0])
+                d2h.append(results[1])
+            host_to_device = scaler / numpy.array(h2d, numpy.float64)
+            device_to_host = scaler / numpy.array(d2h, numpy.float64)
+            host_to_device /= 1024*1024
+            device_to_host /= 1024*1024
+            print("| {} | {:.2f} | {:.2f} |".format(name + " h2d", numpy.mean(host_to_device), numpy.std(host_to_device)))
+            print("| {} | {:.2f} | {:.2f} |".format(name + " d2h", numpy.mean(device_to_host), numpy.std(device_to_host)))
+        print()
+        print("1KB")
+        print("| test | mean | std |")
+        print("| ----- | ----- | ----- |")
+        _test("test_list", False)
+        _test("test_bytes", False)
+        _test("test_byte_list", False)
+        _test("test_array", False)
+
+        print("1MB")
+        print("| test | mean | std |")
+        print("| ----- | ----- | ----- |")
+        _test("test_list", True)
+        _test("test_bytes", True)
+        _test("test_byte_list", True)
+        _test("test_array", True)
+
 
     def test_bytes_large(self):
         exp = self.create(_Transfer)
