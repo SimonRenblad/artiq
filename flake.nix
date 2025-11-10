@@ -4,6 +4,8 @@
   inputs = {
     nac3 = {
       url = "https://git.m-labs.hk/m-labs/nac3.git";
+      ref = "master";
+      rev = "011fa9c86fc2ab9064b8290ee81225da783657cc";
       type = "git";
     };
 
