@@ -3,7 +3,8 @@
 
   inputs = {
     nac3 = {
-      url = "https://git.m-labs.hk/m-labs/nac3.git";
+      url = "https://git.m-labs.hk/srenblad/nac3.git";
+      ref = "make_host_obj_err";
       type = "git";
     };
 

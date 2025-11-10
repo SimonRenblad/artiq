@@ -70,17 +70,18 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1762007764,
-        "narHash": "sha256-MDs3Pa6FtJ6hgZe1skqrcjI9jEz6H3v7fWdBlodSHuw=",
-        "ref": "refs/heads/master",
-        "rev": "66427b06950db13086d311cb030423b7e93fa3a5",
-        "revCount": 1765,
+        "lastModified": 1762842351,
+        "narHash": "sha256-FNraekgp1bZvs1piyiksDZkpALKSlAnrNtFZf2b9mFY=",
+        "ref": "make_host_obj_err",
+        "rev": "a373855c56392a867f362594b2b3b4083e7155fc",
+        "revCount": 1771,
         "type": "git",
-        "url": "https://git.m-labs.hk/m-labs/nac3.git"
+        "url": "https://git.m-labs.hk/srenblad/nac3.git"
       },
       "original": {
+        "ref": "make_host_obj_err",
         "type": "git",
-        "url": "https://git.m-labs.hk/m-labs/nac3.git"
+        "url": "https://git.m-labs.hk/srenblad/nac3.git"
       }
     },
     "naersk": {
