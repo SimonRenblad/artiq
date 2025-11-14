@@ -3,8 +3,9 @@
 
   inputs = {
     nac3 = {
-      url = "https://git.m-labs.hk/m-labs/nac3.git";
+      url = "https://git.m-labs.hk/srenblad/nac3.git";
       type = "git";
+      ref = "fix_missing_attribute_case";
     };
 
     rust-overlay = {
