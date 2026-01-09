@@ -1,6 +1,7 @@
 import re
 from math import inf, copysign
 from PyQt6 import QtCore, QtGui, QtWidgets
+import numpy as np
 
 
 _float_acceptable = re.compile(
@@ -20,21 +21,10 @@ class ScientificSpinBox(QtWidgets.QDoubleSpinBox):
         self.setCorrectionMode(self.CorrectionMode.CorrectToPreviousValue)
         # singleStep: resolution for step, buttons, accelerators
         # decimals: absolute rounding granularity
-        # sigFigs: number of significant digits shown
-        self.setSigFigs()
         self.setRelativeStep()
         self.setRange(-inf, inf)
         self.setValue(0)
         # self.setKeyboardTracking(False)
-
-    def setSigFigs(self, d=None):
-        if d is None:
-            d = self.decimals() + 3
-        self._sig_figs = max(1, int(d))
-        self._fmt = "{{:.{}g}}".format(self._sig_figs)
-
-    def sigFigs(self):
-        return self._sig_figs
 
     def setRelativeStep(self, s=None):
         if s is None:
@@ -49,9 +39,10 @@ class ScientificSpinBox(QtWidgets.QDoubleSpinBox):
             raise NotImplementedError
 
     def textFromValue(self, v):
-        t = self._fmt.format(v)
-        t = re.sub(_exp_shorten, "e", t, 1)
-        return t
+        return np.format_float_positional(v,
+                                          precision=self.decimals(),
+                                          trim='-',
+                                          unique=True)
 
     def valueFromText(self, text):
         clean = text

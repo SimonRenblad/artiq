@@ -323,7 +323,6 @@ class NumberEntryFloat(ScientificSpinBox):
         procdesc = argument["desc"]
         scale = procdesc["scale"]
         self.setDecimals(procdesc["precision"])
-        self.setSigFigs()
         self.setSingleStep(procdesc["step"]/scale)
         self.setRelativeStep()
         if procdesc["min"] is not None:
@@ -362,7 +361,6 @@ class _NoScan(LayoutWidget):
         self.value = ScientificSpinBox()
         disable_scroll_wheel(self.value)
         self.value.setDecimals(procdesc["precision"])
-        self.value.setSigFigs()
         if procdesc["global_min"] is not None:
             self.value.setMinimum(procdesc["global_min"]/scale)
         else:
@@ -445,10 +443,8 @@ class _RangeScan(LayoutWidget):
         self.layout.setColumnStretch(1, 1)
 
         apply_properties(start)
-        start.setSigFigs()
         start.setRelativeStep()
         apply_properties(stop)
-        stop.setSigFigs()
         stop.setRelativeStep()
         apply_properties(scanner)
 
@@ -511,7 +507,6 @@ class _CenterScan(LayoutWidget):
         center = ScientificSpinBox()
         disable_scroll_wheel(center)
         apply_properties(center)
-        center.setSigFigs()
         center.setRelativeStep()
         center.setValue(state["center"]/scale)
         self.addWidget(center, 0, 1)
@@ -520,7 +515,6 @@ class _CenterScan(LayoutWidget):
         span = ScientificSpinBox()
         disable_scroll_wheel(span)
         apply_properties(span)
-        span.setSigFigs()
         span.setRelativeStep()
         span.setMinimum(0)
         span.setValue(state["span"]/scale)
@@ -530,7 +524,6 @@ class _CenterScan(LayoutWidget):
         step = ScientificSpinBox()
         disable_scroll_wheel(step)
         apply_properties(step)
-        step.setSigFigs()
         step.setRelativeStep()
         step.setMinimum(0)
         step.setValue(state["step"]/scale)
