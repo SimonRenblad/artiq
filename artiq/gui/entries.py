@@ -338,6 +338,7 @@ class NumberEntryFloat(ScientificSpinBox):
 
         self.setValue(argument["state"]/scale)
         def update(value):
+            value = round(value, self.decimals())
             argument["state"] = value*scale
         self.valueChanged.connect(update)
 
